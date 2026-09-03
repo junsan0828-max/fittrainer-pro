@@ -1,0 +1,167 @@
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+
+const VALID_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
+const CATEGORY_CODES = ['STR', 'MOV', 'CFR', 'CFS', 'CCB', 'CCS', 'STT', 'CAR'];
+const VIDEO_PORT = 3737;
+
+let mainWindow;
+let libraryFolder = null;
+
+function configPath() { return path.join(app.getPath('userData'), 'ft-config.json'); }
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { return {}; }
+}
+function saveConfig(obj) {
+  try { fs.writeFileSync(configPath(), JSON.stringify(obj), 'utf8'); } catch {}
+}
+
+function parseFileName(fileName) {
+  const base = path.basename(fileName, path.extname(fileName));
+  const parts = base.split('_');
+  if (parts.length >= 4 && CATEGORY_CODES.includes(parts[0])) {
+    return {
+      code: parts[0],
+      part: parts[1],
+      name: parts[2],
+      reps: parseInt(parts[3], 10) || 0,
+    };
+  }
+  if (parts.length >= 3 && CATEGORY_CODES.includes(parts[0])) {
+    return { code: parts[0], part: parts[1], name: parts[2], reps: 0 };
+  }
+  return { code: '', part: '', name: base, reps: 0 };
+}
+
+function detectCategoryFromPath(filePath) {
+  const dir = path.dirname(filePath);
+  for (const code of CATEGORY_CODES) {
+    if (dir.includes(code + '_') || dir.includes(code)) return code;
+  }
+  return '';
+}
+
+function scanFolder(folderPath) {
+  const results = [];
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (VALID_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) {
+        const parsed = parseFileName(entry.name);
+        const folderCode = detectCategoryFromPath(fullPath);
+        const code = parsed.code || folderCode;
+        results.push({
+          id: fullPath,
+          fileName: entry.name,
+          code,
+          name: parsed.name,
+          part: parsed.part,
+          reps: parsed.reps,
+          duration: 0,
+          url: `http://localhost:${VIDEO_PORT}/localvideo?path=${encodeURIComponent(fullPath)}`,
+          filePath: fullPath,
+        });
+      }
+    }
+  }
+  walk(folderPath);
+  return results;
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 1024,
+    minHeight: 700,
+    frame: false,
+    backgroundColor: '#0A0A0C',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  const isDev = !app.isPackaged;
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'dist', 'index.html'));
+  }
+}
+
+app.whenReady().then(() => {
+  require('./server');
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+ipcMain.handle('select-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  libraryFolder = result.filePaths[0];
+  setLibraryRoot(libraryFolder);
+  saveConfig({ ...loadConfig(), libraryFolder });
+  return { folder: libraryFolder, clips: scanFolder(libraryFolder) };
+});
+
+ipcMain.handle('rescan-folder', async () => {
+  if (!libraryFolder) return null;
+  return { folder: libraryFolder, clips: scanFolder(libraryFolder) };
+});
+
+ipcMain.handle('get-library-folder', () => libraryFolder);
+
+ipcMain.handle('auto-scan-saved-folder', () => {
+  const cfg = loadConfig();
+  const saved = cfg.libraryFolder;
+  if (!saved || !fs.existsSync(saved)) return null;
+  libraryFolder = saved;
+  setLibraryRoot(libraryFolder);
+  return { folder: libraryFolder, clips: scanFolder(libraryFolder) };
+});
+
+ipcMain.on('window-minimize', () => mainWindow?.minimize());
+ipcMain.on('window-maximize', () => {
+  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
+  else mainWindow?.maximize();
+});
+ipcMain.on('window-close', () => mainWindow?.close());
+
+const { getIO, updateState, setLibraryRoot } = require('./server');
+ipcMain.on('player-state', (_e, state) => {
+  updateState(state);
+  const io = getIO();
+  if (io) io.emit('state', state);
+});
+
+ipcMain.handle('save-data', (_e, key, value) => {
+  try {
+    const dir = app.getPath('userData');
+    fs.writeFileSync(path.join(dir, `${key}.json`), JSON.stringify(value), 'utf8');
+    return true;
+  } catch { return false; }
+});
+
+ipcMain.handle('load-data', (_e, key) => {
+  try {
+    const file = path.join(app.getPath('userData'), `${key}.json`);
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { return null; }
+});

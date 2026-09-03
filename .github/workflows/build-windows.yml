@@ -1,0 +1,62 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: fittrainer-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: fittrainer-pro
+        run: npm ci
+
+      - name: Build renderer
+        working-directory: fittrainer-pro
+        run: npm run build:renderer
+
+      - name: Build Windows installer
+        working-directory: fittrainer-pro
+        run: npx electron-builder --win --publish never
+
+      - name: List dist
+        working-directory: fittrainer-pro
+        run: dir dist
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: FitTrainer Pro v${{ github.event.inputs.version }}
+          body: |
+            ## FitTrainer Pro v${{ github.event.inputs.version }}
+
+            ### How to install
+            1. Download `FitTrainer Pro Setup.exe` below
+            2. Run and install (you can choose the installation path)
+            3. Launch FitTrainer Pro from the desktop shortcut
+            4. Select your workout video folder and start using it
+
+            > Copy your workout video files separately before use.
+          files: fittrainer-pro/dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

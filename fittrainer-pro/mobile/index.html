@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>FitTrainer Remote</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,-apple-system,sans-serif;background:#0A0A0C;color:#EBEBEF;
+  min-height:100vh;display:flex;flex-direction:column;overflow-x:hidden}
+.header{padding:16px;text-align:center;border-bottom:1px solid #222228}
+.header h1{font-size:18px;font-weight:600;color:#7C3AED}
+.header .sub{font-size:12px;color:#60606A;margin-top:4px}
+.now-playing{padding:16px;background:#111114;margin:12px;border-radius:8px}
+.now-playing .label{font-size:11px;color:#60606A;text-transform:uppercase;letter-spacing:1px}
+.now-playing .title{font-size:20px;font-weight:700;margin-top:4px}
+.now-playing .meta{font-size:13px;color:#60606A;margin-top:4px}
+.rest-indicator{padding:12px 16px;margin:0 12px;border-radius:8px;text-align:center;
+  font-size:24px;font-weight:700;display:none}
+.rest-indicator.set{background:rgba(245,158,11,.15);color:#F59E0B}
+.rest-indicator.move{background:rgba(124,58,237,.15);color:#7C3AED}
+.controls{display:flex;flex-direction:column;gap:12px;padding:16px 12px;flex:1}
+.btn-row{display:flex;gap:10px}
+.btn{flex:1;padding:14px;border:none;border-radius:8px;font-size:15px;font-weight:600;
+  cursor:pointer;color:#EBEBEF;transition:opacity .15s}
+.btn:active{opacity:.7}
+.btn-primary{background:#7C3AED}
+.btn-secondary{background:#222228}
+.btn-warn{background:#E84040}
+.btn-large{padding:20px;font-size:18px}
+.queue{padding:0 12px 24px;max-height:40vh;overflow-y:auto}
+.queue-title{font-size:12px;color:#60606A;text-transform:uppercase;letter-spacing:1px;
+  padding:8px 0}
+.queue-item{display:flex;align-items:center;gap:8px;padding:8px;border-radius:6px;
+  font-size:13px;margin-bottom:2px}
+.queue-item.active{background:#17171B}
+.queue-item.done{color:#60606A;text-decoration:line-through}
+.q-idx{width:20px;text-align:center;color:#60606A;font-size:11px}
+.q-cat{font-size:10px;padding:2px 6px;border-radius:4px;font-weight:600}
+.status{text-align:center;padding:12px;color:#60606A;font-size:13px}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>FitTrainer Remote</h1>
+  <div class="sub" id="conn-status">연결 중...</div>
+</div>
+<div class="now-playing" id="now-playing">
+  <div class="label">현재 동작</div>
+  <div class="title" id="np-title">--</div>
+  <div class="meta" id="np-meta"></div>
+</div>
+<div class="rest-indicator" id="rest-indicator"></div>
+<div class="controls">
+  <div class="btn-row">
+    <button class="btn btn-primary btn-large" onclick="send('toggle')" id="btn-play">재생 / 일시정지</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="send('prev')">이전</button>
+    <button class="btn btn-secondary" onclick="send('next')">다음</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="send('skip-rest')">휴식 건너뛰기</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="send('speed',{v:0.5})">0.5x</button>
+    <button class="btn btn-secondary" onclick="send('speed',{v:1})">1x</button>
+    <button class="btn btn-secondary" onclick="send('speed',{v:1.5})">1.5x</button>
+  </div>
+</div>
+<div class="queue">
+  <div class="queue-title">전체 큐</div>
+  <div id="queue-list"></div>
+</div>
+<div class="status" id="footer-status"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const CAT_COLORS={STR:'#E84040',MOV:'#9B5CF6',CFR:'#F59E0B',CFS:'#F97316',
+  CCB:'#3B82F6',CCS:'#A78BFA',STT:'#22C55E',CAR:'#84CC16'};
+const socket=io();
+socket.on('connect',()=>{document.getElementById('conn-status').textContent='연결됨';});
+socket.on('disconnect',()=>{document.getElementById('conn-status').textContent='연결 끊김';});
+socket.on('state',render);
+
+function send(type,data){socket.emit('command',{type,...(data||{})});}
+
+function render(s){
+  if(!s)return;
+  const q=s.queue||[];
+  const ci=s.currentIndex||0;
+  const cur=q[ci];
+  const np=document.getElementById('np-title');
+  const meta=document.getElementById('np-meta');
+  const ri=document.getElementById('rest-indicator');
+  ri.style.display='none';
+  if(cur){
+    if(cur.type==='clip'){
+      np.textContent=cur.clip?.name||cur.clip?.fileName||'--';
+      meta.textContent=[cur.clip?.code,cur.clip?.part,
+        cur.totalSets>1?`세트 ${cur.setNum}/${cur.totalSets}`:''].filter(Boolean).join(' | ');
+    }else if(cur.type==='rest'){
+      np.textContent='휴식';
+      meta.textContent=`${cur.duration}초`;
+      ri.style.display='block';
+      ri.className='rest-indicator '+(cur.restKind==='set'?'set':'move');
+      ri.textContent=cur.restKind==='set'?'세트 휴식':'동작 전환 휴식';
+    }
+  }else{
+    np.textContent='--';meta.textContent='';
+  }
+  const ql=document.getElementById('queue-list');
+  ql.innerHTML=q.map((item,i)=>{
+    const cls=i===ci?'active':i<ci?'done':'';
+    if(item.type==='rest')return`<div class="queue-item ${cls}"><span class="q-idx">${i+1}</span>
+      <span style="color:${item.restKind==='set'?'#F59E0B':'#7C3AED'}">
+      ${item.restKind==='set'?'세트 휴식':'전환 휴식'} ${item.duration}s</span></div>`;
+    const c=item.clip||{};
+    const col=CAT_COLORS[c.code]||'#60606A';
+    return`<div class="queue-item ${cls}"><span class="q-idx">${i+1}</span>
+      <span class="q-cat" style="background:${col}22;color:${col}">${c.code||'?'}</span>
+      <span>${c.name||c.fileName||'--'}</span>
+      ${item.totalSets>1?`<span style="color:#60606A;margin-left:auto">S${item.setNum}/${item.totalSets}</span>`:''}
+      </div>`;
+  }).join('');
+}
+</script>
+</body>
+</html>

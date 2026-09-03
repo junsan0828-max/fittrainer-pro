@@ -1,0 +1,49 @@
+{
+  "name": "fittrainer-pro",
+  "version": "1.0.0",
+  "description": "FitTrainer Pro - 운동 트레이닝 전문 데스크톱 앱",
+  "main": "main.js",
+  "scripts": {
+    "start": "concurrently \"cd renderer && npx vite --port 5173\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev": "concurrently \"cd renderer && npx vite --port 5173\" \"wait-on http://localhost:5173 && electron .\"",
+    "web": "node web.js",
+    "build:renderer": "cd renderer && npm install && npx vite build",
+    "build": "npm run build:renderer && electron-builder",
+    "pack": "npm run build:renderer && electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.fittrainer.pro",
+    "productName": "FitTrainer Pro",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "mobile/**",
+      "renderer/dist/**",
+      "node_modules/**"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "FitTrainer Pro"
+    }
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3",
+    "wait-on": "^7.2.0"
+  }
+}
