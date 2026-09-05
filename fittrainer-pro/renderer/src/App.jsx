@@ -38,6 +38,20 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
+// 로컬 영상 파일 경로를 file:// URL 로 변환.
+// 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
+function clipSrc(clip) {
+  if (!clip) return '';
+  const p = clip.filePath || clip.id;
+  if (!p) return clip.url || '';
+  const normalized = String(p).replace(/\\/g, '/');
+  // 윈도우 드라이브 문자(C:)는 인코딩하면 안 된다
+  const encoded = normalized.split('/')
+    .map((seg, i) => (i === 0 && /^[A-Za-z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+    .join('/');
+  return normalized.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`;
+}
+
 function loadLS(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
   catch { return fallback; }
@@ -1111,8 +1125,13 @@ function PlayerTab({ blocks }) {
       style={{ display: 'flex', height: '100%', background: '#000', position: 'relative' }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {cur?.type === 'clip' ? (
-          <video ref={videoRef} key={cur.clip?.url || ci}
-            src={cur.clip?.url || ''} onEnded={handleVideoEnded}
+          <video ref={videoRef} key={cur.clip?.filePath || cur.clip?.url || ci}
+            src={clipSrc(cur.clip)} onEnded={handleVideoEnded}
+            onError={() => {
+              const fallback = cur.clip?.url;
+              const el = videoRef.current;
+              if (el && fallback && el.src !== fallback) el.src = fallback;
+            }}
             onClick={togglePlay}
             style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
         ) : cur?.type === 'rest' ? (

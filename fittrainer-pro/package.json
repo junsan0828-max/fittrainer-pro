@@ -1,6 +1,6 @@
 {
   "name": "fittrainer-pro",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "FitTrainer Pro - 운동 트레이닝 전문 데스크톱 앱",
   "main": "main.js",
   "scripts": {
