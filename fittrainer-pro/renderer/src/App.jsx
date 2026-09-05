@@ -994,8 +994,11 @@ function expandToQueue(blocks) {
   return q;
 }
 
+const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
+
 function PlayerTab({ blocks }) {
   const [queue, setQueue] = useState([]);
+  const [videoErr, setVideoErr] = useState(null);
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1107,10 +1110,28 @@ function PlayerTab({ blocks }) {
   }
 
   useEffect(() => {
+    setVideoErr(null);
     if (cur?.type === 'clip' && videoRef.current && playing) {
-      videoRef.current.play().catch(() => {});
+      videoRef.current.play().catch(e => setVideoErr(`재생 실패: ${e?.message || e}`));
     }
   }, [ci, cur?.type]);
+
+  function handleVideoError() {
+    const el = videoRef.current;
+    const code = el?.error?.code;
+    const ext = (cur?.clip?.fileName || '').match(/\.[^.]+$/)?.[0]?.toLowerCase() || '';
+    const codes = {
+      1: '로딩 중단됨',
+      2: '네트워크 오류',
+      3: '디코딩 실패 - 코덱을 지원하지 않습니다',
+      4: '지원하지 않는 형식입니다',
+    };
+    let msg = codes[code] || `알 수 없는 오류 (code ${code})`;
+    if ((code === 3 || code === 4) && ext && !PLAYABLE_EXT.includes(ext)) {
+      msg = `${ext} 형식은 재생할 수 없습니다. mp4(H.264)로 변환해 주세요.`;
+    }
+    setVideoErr(msg);
+  }
 
   if (queue.length === 0) {
     return (
@@ -1125,15 +1146,23 @@ function PlayerTab({ blocks }) {
       style={{ display: 'flex', height: '100%', background: '#000', position: 'relative' }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {cur?.type === 'clip' ? (
-          <video ref={videoRef} key={cur.clip?.filePath || cur.clip?.url || ci}
-            src={clipSrc(cur.clip)} onEnded={handleVideoEnded}
-            onError={() => {
-              const fallback = cur.clip?.url;
-              const el = videoRef.current;
-              if (el && fallback && el.src !== fallback) el.src = fallback;
-            }}
-            onClick={togglePlay}
-            style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
+          <>
+            <video ref={videoRef} key={cur.clip?.filePath || cur.clip?.url || ci}
+              src={clipSrc(cur.clip)} onEnded={handleVideoEnded}
+              onError={handleVideoError} onClick={togglePlay}
+              style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
+            {videoErr && (
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 10,
+                padding: 32, textAlign: 'center', pointerEvents: 'none',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#F87171' }}>{videoErr}</div>
+                <div style={{ fontSize: 12, color: T.dim, wordBreak: 'break-all' }}>{cur.clip?.fileName || ''}</div>
+                <div style={{ fontSize: 11, color: T.dim, wordBreak: 'break-all' }}>{clipSrc(cur.clip)}</div>
+              </div>
+            )}
+          </>
         ) : cur?.type === 'rest' ? (
           <div style={{
             width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
