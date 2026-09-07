@@ -12,8 +12,19 @@ function unpacked(p) {
   return p ? p.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep) : p;
 }
 
-const FFMPEG = unpacked(require('ffmpeg-static'));
-const FFPROBE = unpacked(require('ffprobe-static').path);
+// ffmpeg 를 못 찾아도 앱 자체는 떠야 한다. 변환 기능만 비활성화된다.
+function resolveBin(load) {
+  try {
+    const p = unpacked(load());
+    return p && fs.existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+const FFMPEG = resolveBin(() => require('ffmpeg-static'));
+const FFPROBE = resolveBin(() => require('ffprobe-static').path);
+const MISSING = 'ffmpeg 를 찾을 수 없어 변환할 수 없습니다.';
 
 // Chromium 이 재생할 수 있는 코덱
 const OK_VIDEO = ['h264', 'vp8', 'vp9', 'av1', 'theora'];
@@ -47,6 +58,7 @@ function hasConverted(filePath) {
 // ffprobe 로 코덱을 읽어 재생 가능 여부를 판단한다
 function probe(filePath) {
   return new Promise(resolve => {
+    if (!FFPROBE) return resolve({ ok: false, video: null, audio: null, audioOk: true, error: MISSING });
     execFile(FFPROBE, [
       '-v', 'error',
       '-show_entries', 'stream=codec_type,codec_name',
@@ -79,6 +91,7 @@ async function probeAll(filePaths, onEach) {
 
 function convert(filePath, onProgress) {
   return new Promise((resolve, reject) => {
+    if (!FFMPEG) return reject(new Error(MISSING));
     const out = convertedPath(filePath);
     if (!out) return reject(new Error('파일을 찾을 수 없습니다'));
     if (fs.existsSync(out)) return resolve(out);

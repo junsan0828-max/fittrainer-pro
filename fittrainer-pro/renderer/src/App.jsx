@@ -1074,9 +1074,11 @@ function expandToQueue(blocks) {
 
 const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
-function PlayerTab({ blocks, playbackMap }) {
+function PlayerTab({ blocks, playbackMap, onConvertOne }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
+  const [converting, setConverting] = useState(false);
+  const [convertSec, setConvertSec] = useState(0);
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1187,28 +1189,53 @@ function PlayerTab({ blocks, playbackMap }) {
     goNext();
   }
 
+  const src = clipSrc(cur?.clip, playbackMap);
+
   useEffect(() => {
     setVideoErr(null);
     if (cur?.type === 'clip' && videoRef.current && playing) {
       videoRef.current.play().catch(e => setVideoErr(`재생 실패: ${e?.message || e}`));
     }
-  }, [ci, cur?.type]);
+  }, [ci, cur?.type, src]);
 
-  function handleVideoError() {
+  // 변환 중에는 ffmpeg 가 처리한 길이를 보여준다
+  useEffect(() => {
+    if (!converting) return;
+    return window.electronAPI?.onConvertProgress?.(p => {
+      if (p.stage === 'progress') setConvertSec(p.seconds || 0);
+    });
+  }, [converting]);
+
+  async function handleVideoError() {
     const el = videoRef.current;
     const code = el?.error?.code;
-    const ext = (cur?.clip?.fileName || '').match(/\.[^.]+$/)?.[0]?.toLowerCase() || '';
+    const fp = cur?.clip?.filePath;
+
+    // 재생할 수 없는 코덱이면 그 자리에서 변환해 이어서 재생한다
+    if ((code === 3 || code === 4) && fp && !playbackMap?.[fp] && !converting && onConvertOne) {
+      setVideoErr(null);
+      setConvertSec(0);
+      setConverting(true);
+      try {
+        const out = await onConvertOne(fp);
+        if (out) return; // playbackMap 이 바뀌면 src 가 교체되며 재생된다
+        setVideoErr('변환에 실패했습니다. 손상된 파일일 수 있습니다.');
+        return;
+      } catch (e) {
+        setVideoErr(`변환 실패: ${e?.message || e}`);
+        return;
+      } finally {
+        setConverting(false);
+      }
+    }
+
     const codes = {
       1: '로딩 중단됨',
-      2: '네트워크 오류',
+      2: '네트워크 오류 - 파일을 읽을 수 없습니다',
       3: '디코딩 실패 - 코덱을 지원하지 않습니다',
       4: '지원하지 않는 형식입니다',
     };
-    let msg = codes[code] || `알 수 없는 오류 (code ${code})`;
-    if ((code === 3 || code === 4) && ext && !PLAYABLE_EXT.includes(ext)) {
-      msg = `${ext} 형식은 재생할 수 없습니다. mp4(H.264)로 변환해 주세요.`;
-    }
-    setVideoErr(msg);
+    setVideoErr(codes[code] || `알 수 없는 오류 (code ${code})`);
   }
 
   if (queue.length === 0) {
@@ -1225,11 +1252,26 @@ function PlayerTab({ blocks, playbackMap }) {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
         {cur?.type === 'clip' ? (
           <>
-            <video ref={videoRef} key={cur.clip?.filePath || cur.clip?.url || ci}
-              src={clipSrc(cur.clip, playbackMap)} onEnded={handleVideoEnded}
+            <video ref={videoRef} key={src || ci}
+              src={src} onEnded={handleVideoEnded}
               onError={handleVideoError} onClick={togglePlay}
               style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
-            {videoErr && (
+            {converting && (
+              <div style={{
+                position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 12,
+                padding: 32, textAlign: 'center', pointerEvents: 'none',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#F59E0B' }}>
+                  재생할 수 있는 형식으로 변환 중입니다
+                </div>
+                <div style={{ fontSize: 13, color: T.dim }}>
+                  {convertSec > 0 ? `${convertSec.toFixed(0)}초 분량 처리됨` : '잠시만 기다려 주세요'}
+                </div>
+                <div style={{ fontSize: 12, color: T.dim, wordBreak: 'break-all' }}>{cur.clip?.fileName || ''}</div>
+              </div>
+            )}
+            {videoErr && !converting && (
               <div style={{
                 position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center', gap: 10,
@@ -1237,7 +1279,7 @@ function PlayerTab({ blocks, playbackMap }) {
               }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: '#F87171' }}>{videoErr}</div>
                 <div style={{ fontSize: 12, color: T.dim, wordBreak: 'break-all' }}>{cur.clip?.fileName || ''}</div>
-                <div style={{ fontSize: 11, color: T.dim, wordBreak: 'break-all' }}>{clipSrc(cur.clip, playbackMap)}</div>
+                <div style={{ fontSize: 11, color: T.dim, wordBreak: 'break-all' }}>{src}</div>
               </div>
             )}
           </>
@@ -1392,6 +1434,19 @@ export default function App() {
     return () => { cancelled = true; off?.(); };
   }, [clips]);
 
+  // 재생 도중 실패한 영상 한 개를 즉시 변환한다
+  async function convertOne(filePath) {
+    const api = window.electronAPI;
+    if (!api?.convertClips || !filePath) return null;
+    const { done } = await api.convertClips([filePath]);
+    const out = done?.[filePath];
+    if (out) {
+      setPlaybackMap(prev => ({ ...prev, [filePath]: out }));
+      setCodec(c => ({ ...c, unsupported: c.unsupported.filter(u => u.filePath !== filePath) }));
+    }
+    return out || null;
+  }
+
   async function convertUnsupported() {
     const api = window.electronAPI;
     const paths = codec.unsupported.map(u => u.filePath);
@@ -1467,7 +1522,7 @@ export default function App() {
         {tab === 'builder' && (
           <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
-        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} />}
+        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} onConvertOne={convertOne} />}
       </div>
     </div>
   );
