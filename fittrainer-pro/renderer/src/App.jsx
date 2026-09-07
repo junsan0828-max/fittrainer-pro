@@ -40,6 +40,12 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
 // 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
+// 파일명 맨 앞 토큰을 분류 접두어로 본다.
+// "AE 팔벌려뛰기(외발). 전신. 020.mp4" -> "AE",  "STR_하체_스쿼트_12.mp4" -> "STR"
+function filePrefix(fileName) {
+  return (fileName || '').match(/^[A-Za-z0-9가-힣]+/)?.[0]?.toUpperCase() || '';
+}
+
 // ffprobe 가 알려준 코덱 이름을 브라우저가 아는 MIME 으로 옮긴다
 const CODEC_MIME = {
   h264: 'video/mp4; codecs="avc1.42E01E"',
@@ -160,6 +166,81 @@ function TabBar({ tab, setTab }) {
   );
 }
 
+// 조합에 쓸 클립이 하나도 없을 때, 무엇 때문인지 짚어준다.
+// "클립을 불러오세요" 만으로는 이미 불러온 사용자가 다음에 뭘 할지 알 수 없다.
+function explainEmptyPool(enriched, sessionCfg) {
+  if (enriched.length === 0) {
+    return '라이브러리가 비어 있습니다. 라이브러리 탭에서 운동 영상 폴더를 선택하세요.';
+  }
+  const uncategorized = enriched.filter(c => !c.code).length;
+  if (uncategorized === enriched.length) {
+    return `영상 ${enriched.length}개가 모두 분류되지 않았습니다.\n\n`
+      + '라이브러리 탭 상단에서 파일명 접두어별로 종류를 지정해 주세요.\n'
+      + '분류가 되어야 자동 조합이 어떤 운동인지 알 수 있습니다.';
+  }
+  const cats = sessionCfg.includeCats || [];
+  if (cats.length > 0) {
+    return `선택한 카테고리에 해당하는 영상이 없습니다.\n\n`
+      + `분류된 영상 ${enriched.length - uncategorized}개, 미분류 ${uncategorized}개입니다.\n`
+      + '사용 카테고리를 더 선택하거나, 라이브러리 탭에서 미분류 영상을 분류해 주세요.';
+  }
+  return '조건에 맞는 영상이 없습니다. 집중 부위나 강도를 바꿔 보세요.';
+}
+
+// 카테고리가 비어 있는 클립들을 파일명 접두어별로 묶어 한 번에 분류하게 한다.
+// 분류가 안 된 클립은 자동 조합에서 통째로 제외되므로 눈에 띄게 알려야 한다.
+function PrefixMapper({ clips, prefixCats, setPrefixCat }) {
+  const groups = useMemo(() => {
+    const m = {};
+    for (const c of clips) {
+      if (c.code) continue;
+      const p = filePrefix(c.fileName);
+      if (!p) continue;
+      (m[p] = m[p] || []).push(c);
+    }
+    return Object.entries(m).sort((a, b) => b[1].length - a[1].length);
+  }, [clips]);
+
+  if (groups.length === 0) return null;
+  const total = groups.reduce((n, [, list]) => n + list.length, 0);
+
+  return (
+    <div style={{
+      padding: '10px 12px', borderBottom: `1px solid ${T.border}`,
+      background: 'rgba(245,158,11,.08)',
+    }}>
+      <div style={{ fontSize: 12, color: '#F59E0B', fontWeight: 600, marginBottom: 8 }}>
+        분류되지 않은 영상 {total}개 — 아래에서 종류를 지정하면 자동 조합에 쓰입니다
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {groups.map(([prefix, list]) => (
+          <div key={prefix} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+              background: T.panel, color: T.text, minWidth: 44, textAlign: 'center',
+            }}>{prefix}</span>
+            <span style={{ fontSize: 11, color: T.dim, minWidth: 42 }}>{list.length}개</span>
+            <select
+              value={prefixCats[prefix] || ''}
+              onChange={e => setPrefixCat(prefix, e.target.value)}
+              style={{
+                flex: 1, maxWidth: 220, padding: '4px 8px', borderRadius: 4,
+                background: T.panel, color: T.text, border: `1px solid ${T.border}`, fontSize: 12,
+              }}>
+              <option value="">— 종류 선택 —</option>
+              {CATS.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+            </select>
+            <span style={{
+              fontSize: 11, color: T.dim, flex: 1, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{list[0]?.fileName}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // 재생 불가 코덱 안내와 변환 진행 상황
 function CodecBanner({ codec, onConvert }) {
   if (!codec || codec.state === 'idle') return null;
@@ -212,7 +293,7 @@ function CodecBanner({ codec, onConvert }) {
   ));
 }
 
-function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert }) {
+function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert, prefixCats, setPrefixCat }) {
   const [filter, setFilter] = useState('');
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -293,6 +374,7 @@ function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone
         </div>
 
         <CodecBanner codec={codec} onConvert={onConvert} />
+        <PrefixMapper clips={clips} prefixCats={prefixCats} setPrefixCat={setPrefixCat} />
         <div style={{ padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="검색..." style={{ width: '100%', marginBottom: 8 }} />
@@ -613,7 +695,7 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
       composeProgram({ enrichedClips: enriched, customer, sessionCfg });
 
     if (warmupClips.length + mainClips.length + coolClips.length === 0) {
-      alert('조합할 클립이 없습니다. 라이브러리에서 클립을 먼저 불러오세요.');
+      alert(explainEmptyPool(enriched, sessionCfg));
       return;
     }
 
@@ -1389,7 +1471,23 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
 
 export default function App() {
   const [tab, setTab] = useState(() => loadLS('ft_tab', 'library'));
-  const [clips, setClips] = useState(() => loadLS('ft_clips', []));
+  const [rawClips, setClips] = useState(() => loadLS('ft_clips', []));
+  // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
+  const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
+
+  const clips = useMemo(
+    () => rawClips.map(c => (c.code ? c : { ...c, code: prefixCats[filePrefix(c.fileName)] || '' })),
+    [rawClips, prefixCats],
+  );
+
+  function setPrefixCat(prefix, code) {
+    setPrefixCats(prev => {
+      const next = { ...prev };
+      if (code) next[prefix] = code; else delete next[prefix];
+      saveData('ft_prefix_cats', next);
+      return next;
+    });
+  }
   const [customers, setCustomers] = useState(() => loadLS('ft_customers', []));
   const [blocks, setBlocks] = useState(() => loadLS('ft_blocks', []));
   const [clipAttrs, setClipAttrs] = useState(() => loadLS('ft_clip_attrs', {}));
@@ -1509,7 +1607,8 @@ export default function App() {
             }}
             analysisDone={analysisDone} setAnalysisDone={setAnalysisDone}
             clipAttrs={clipAttrs} setClipAttrs={setClipAttrs}
-            codec={codec} onConvert={convertUnsupported} />
+            codec={codec} onConvert={convertUnsupported}
+            prefixCats={prefixCats} setPrefixCat={setPrefixCat} />
         )}
         {tab === 'customers' && (
           <CustomersTab customers={customers} setCustomers={setCustomers}
