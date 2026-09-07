@@ -76,7 +76,8 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 // 큐 한 항목이 차지하는 시간(초). 영상은 ffprobe 로 읽어둔 길이를 쓴다.
 function itemSeconds(it) {
   if (!it) return 0;
-  return it.type === 'rest' ? (it.duration || 0) : (it.clip?.duration || 0);
+  if (it.type === 'rest' || it.type === 'break') return it.duration || 0;
+  return it.clip?.duration || 0;
 }
 
 // 전체/경과/남은 시간을 초 단위로 낸다
@@ -88,7 +89,7 @@ function queueTiming(queue, ci, progress, restCountdown) {
     if (i < ci) before += sec;
   }
   const cur = queue[ci];
-  const inCur = cur?.type === 'rest'
+  const inCur = (cur?.type === 'rest' || cur?.type === 'break')
     ? Math.max(0, (cur.duration || 0) - (restCountdown || 0))
     : Math.min(progress || 0, itemSeconds(cur));
   const elapsed = Math.min(before + inCur, total);
@@ -99,8 +100,8 @@ function queueTiming(queue, ci, progress, restCountdown) {
 function humanTime(sec) {
   sec = Math.round(sec || 0);
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
-  if (h > 0) return `${h}시간 ${m}분`;
-  if (m > 0) return `${m}분 ${s2}초`;
+  if (h > 0) return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+  if (m > 0) return s2 > 0 ? `${m}분 ${s2}초` : `${m}분`;
   return `${s2}초`;
 }
 
@@ -256,6 +257,7 @@ function TabBar({ tab, setTab }) {
     { id: 'customers', label: '고객' },
     { id: 'session', label: '세션 설정' },
     { id: 'builder', label: '프로그램 빌더' },
+    { id: 'queue', label: '연속 재생' },
     { id: 'player', label: '재생' },
   ];
   return (
@@ -1352,23 +1354,236 @@ function SummaryRow({ label, value }) {
   );
 }
 
-function expandToQueue(blocks) {
+function expandToQueue(blocks, sessionName) {
   const q = [];
   blocks.forEach(block => {
     for (let s = 1; s <= block.sets; s++) {
-      q.push({ type: 'clip', clip: block.clip, setNum: s, totalSets: block.sets });
+      q.push({ type: 'clip', clip: block.clip, setNum: s, totalSets: block.sets, sessionName });
       if (s < block.sets)
-        q.push({ type: 'rest', restKind: 'set', duration: block.restBetweenSets });
+        q.push({ type: 'rest', restKind: 'set', duration: block.restBetweenSets, sessionName });
     }
     if (block.restAfter > 0)
-      q.push({ type: 'rest', restKind: 'move', duration: block.restAfter });
+      q.push({ type: 'rest', restKind: 'move', duration: block.restAfter, sessionName });
+  });
+  return q;
+}
+
+// 여러 세션을 하나의 큐로 잇는다.
+// 세션과 세션 사이에는 'break' 항목이 들어가고, 그게 끝나면 다음 세션이 이어서 재생된다.
+function expandPlaylist(entries) {
+  const q = [];
+  entries.forEach((entry, i) => {
+    const part = expandToQueue(entry.blocks || [], entry.name);
+    if (part.length === 0) return;
+
+    // 마지막 동작 뒤의 전환 휴식은 세션 사이 휴식과 겹치므로 뺀다
+    const isLastOfSession = i < entries.length - 1;
+    if (isLastOfSession && part[part.length - 1]?.type === 'rest') part.pop();
+
+    q.push(...part);
+    const next = entries[i + 1];
+    if (next && entry.breakAfter > 0) {
+      q.push({
+        type: 'break',
+        duration: entry.breakAfter,
+        sessionName: entry.name,
+        nextName: next.name,
+      });
+    }
   });
   return q;
 }
 
 const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
-function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi }) {
+const BREAK_PRESETS = [0, 60, 180, 300, 600, 900];
+
+// 저장해 둔 세션들을 순서대로 잇고, 사이 휴식을 정한다.
+// 여기서 짠 대기열이 재생 탭의 큐가 된다.
+function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab }) {
+  const [name, setName] = useState('');
+
+  const entries = useMemo(
+    () => playlist.map(p => {
+      const ses = sessions.find(x => x.id === p.sessionId);
+      return ses ? { ...ses, breakAfter: p.breakAfter } : null;
+    }).filter(Boolean),
+    [playlist, sessions],
+  );
+
+  const totalSec = useMemo(
+    () => expandPlaylist(entries).reduce((n, it) => n + itemSeconds(it), 0),
+    [entries],
+  );
+
+  function saveCurrent() {
+    const label = name.trim();
+    if (!label) return alert('세션 이름을 입력하세요.');
+    if (blocks.length === 0) return alert('프로그램 빌더에 동작이 없습니다.');
+    const ses = { id: uid(), name: label, blocks, savedAt: Date.now() };
+    setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
+    setName('');
+  }
+
+  function removeSession(id) {
+    setSessions(prev => { const next = prev.filter(s => s.id !== id); saveData('ft_sessions', next); return next; });
+    setPlaylist(prev => { const next = prev.filter(p => p.sessionId !== id); saveData('ft_playlist', next); return next; });
+  }
+
+  function addToPlaylist(id) {
+    setPlaylist(prev => {
+      const next = [...prev, { sessionId: id, breakAfter: 600 }];
+      saveData('ft_playlist', next);
+      return next;
+    });
+  }
+
+  const patchPlaylist = fn => setPlaylist(prev => { const next = fn(prev); saveData('ft_playlist', next); return next; });
+
+  return (
+    <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
+      <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+
+        {/* 저장된 세션 */}
+        <div style={{ flex: 1, minWidth: 320 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>저장된 세션</div>
+
+          <div style={{
+            display: 'flex', gap: 8, marginBottom: 14, padding: 12,
+            background: T.panel, borderRadius: 8, border: `1px solid ${T.border}`,
+          }}>
+            <input value={name} onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveCurrent()}
+              placeholder="현재 프로그램을 이 이름으로 저장"
+              style={{ flex: 1 }} />
+            <button onClick={saveCurrent} style={{
+              padding: '8px 16px', borderRadius: 6, background: T.accent,
+              color: '#fff', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+            }}>저장</button>
+          </div>
+
+          {sessions.length === 0 ? (
+            <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
+              저장된 세션이 없습니다.<br />
+              프로그램 빌더에서 구성한 뒤 위에서 이름을 붙여 저장하세요.
+            </div>
+          ) : sessions.map(ses => (
+            <div key={ses.id} style={{
+              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+              background: T.surface, border: `1px solid ${T.border}`,
+              borderRadius: 8, marginBottom: 6,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
+                <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
+                  {ses.blocks.length}개 동작 · 약 {humanTime(
+                    expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0))}
+                </div>
+              </div>
+              <button onClick={() => addToPlaylist(ses.id)} style={{
+                padding: '6px 12px', borderRadius: 6, background: T.accent + '22',
+                color: T.accent, fontSize: 12, fontWeight: 600,
+              }}>대기열 추가</button>
+              <button onClick={() => removeSession(ses.id)} style={{
+                padding: '6px 10px', borderRadius: 6, background: 'transparent',
+                color: T.dim, fontSize: 13, border: `1px solid ${T.border}`,
+              }}>✕</button>
+            </div>
+          ))}
+        </div>
+
+        {/* 재생 대기열 */}
+        <div style={{ flex: 1, minWidth: 340 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>재생 대기열</span>
+            {totalSec > 0 && (
+              <span style={{ fontSize: 12, color: T.dim }}>총 {humanTime(totalSec)}</span>
+            )}
+            {playlist.length > 0 && (
+              <button onClick={() => patchPlaylist(() => [])} style={{
+                marginLeft: 'auto', padding: '4px 10px', borderRadius: 6, fontSize: 11,
+                background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+              }}>비우기</button>
+            )}
+          </div>
+
+          {entries.length === 0 ? (
+            <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
+              대기열이 비어 있습니다.<br />
+              왼쪽에서 세션을 추가하면 순서대로 이어서 재생됩니다.
+            </div>
+          ) : (
+            <>
+              {entries.map((e, i) => (
+                <div key={i}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                    background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8,
+                  }}>
+                    <span style={{
+                      width: 22, height: 22, borderRadius: 11, background: T.accent,
+                      color: '#fff', fontSize: 11, fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    }}>{i + 1}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{e.name}</div>
+                      <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
+                        {e.blocks.length}개 동작
+                      </div>
+                    </div>
+                    <button disabled={i === 0}
+                      onClick={() => patchPlaylist(prev => {
+                        const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n;
+                      })}
+                      style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
+                        color: i === 0 ? T.dimMid : T.dim, fontSize: 12 }}>↑</button>
+                    <button disabled={i === entries.length - 1}
+                      onClick={() => patchPlaylist(prev => {
+                        const n = [...prev]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; return n;
+                      })}
+                      style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
+                        color: i === entries.length - 1 ? T.dimMid : T.dim, fontSize: 12 }}>↓</button>
+                    <button onClick={() => patchPlaylist(prev => prev.filter((_, j) => j !== i))}
+                      style={{ padding: '4px 9px', borderRadius: 5, background: 'transparent',
+                        color: T.dim, fontSize: 12, border: `1px solid ${T.border}` }}>✕</button>
+                  </div>
+
+                  {i < entries.length - 1 && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 12px 8px 34px', fontSize: 12, color: T.dim,
+                    }}>
+                      <span>다음까지 휴식</span>
+                      <div style={{ display: 'flex', gap: 3 }}>
+                        {BREAK_PRESETS.map(sec => (
+                          <button key={sec}
+                            onClick={() => patchPlaylist(prev =>
+                              prev.map((p, j) => (j === i ? { ...p, breakAfter: sec } : p)))}
+                            style={{
+                              padding: '4px 9px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                              background: e.breakAfter === sec ? '#22C55E' : T.panel,
+                              color: e.breakAfter === sec ? '#fff' : T.dim,
+                            }}>{sec === 0 ? '없음' : sec < 60 ? `${sec}초` : `${sec / 60}분`}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <button onClick={() => setTab('player')} style={{
+                width: '100%', marginTop: 14, padding: '12px 20px', borderRadius: 8,
+                background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
+              }}>대기열 재생 ({entries.length}개 세션 · {humanTime(totalSec)})</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
   const [converting, setConverting] = useState(false);
@@ -1388,12 +1603,13 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
   const containerRef = useRef(null);
 
   useEffect(() => {
-    const q = expandToQueue(blocks);
+    // 대기열이 짜여 있으면 세션들을 이어 붙이고, 아니면 현재 프로그램만 재생한다
+    const q = playlist?.length ? expandPlaylist(playlist) : expandToQueue(blocks);
     setQueue(q);
     setCi(0);
     setPlaying(false);
     setRestCountdown(0);
-  }, [blocks]);
+  }, [blocks, playlist]);
 
   playingRef.current = playing;
   const timing = queueTiming(queue, ci, progress, restCountdown);
@@ -1446,13 +1662,13 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
   const cur = queue[ci];
 
   useEffect(() => {
-    if (cur?.type !== 'rest') return;
+    if (cur?.type !== 'rest' && cur?.type !== 'break') return;
     setRestCountdown(cur.duration);
   }, [ci, cur?.type]);
 
-  // 휴식 카운트다운. 일시정지하면 같이 멈춘다.
+  // 휴식/세션 간 휴식 카운트다운. 일시정지하면 같이 멈춘다.
   useEffect(() => {
-    if (cur?.type !== 'rest' || !playing) return;
+    if ((cur?.type !== 'rest' && cur?.type !== 'break') || !playing) return;
     restTimer.current = setInterval(() => {
       setRestCountdown(prev => {
         if (prev <= 1) { clearInterval(restTimer.current); goNext(); return 0; }
@@ -1682,6 +1898,32 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
               </div>
             )}
           </>
+        ) : cur?.type === 'break' ? (
+          <div style={{
+            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 4,
+            background: 'linear-gradient(160deg, rgba(34,197,94,.10), rgba(124,58,237,.10))',
+          }}>
+            <div style={{
+              fontSize: 13, fontWeight: 600, letterSpacing: 2, color: '#22C55E',
+              textTransform: 'uppercase', marginBottom: 10,
+            }}>세션 간 휴식</div>
+            <div style={{
+              fontSize: 108, fontWeight: 800, color: '#22C55E', lineHeight: 1,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{mmss(restCountdown)}</div>
+            <div style={{ fontSize: 14, color: T.dim, marginTop: 18 }}>
+              {cur.sessionName ? `${cur.sessionName} 완료` : '세션 완료'}
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 6 }}>
+              다음 · {cur.nextName || '다음 세션'}
+            </div>
+            <button onClick={skipRest} style={{
+              marginTop: 28, padding: '12px 28px', borderRadius: 8,
+              background: 'rgba(34,197,94,.16)', color: '#22C55E',
+              fontSize: 14, fontWeight: 600,
+            }}>지금 시작</button>
+          </div>
         ) : cur?.type === 'rest' ? (
           <div style={{
             width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
@@ -1705,13 +1947,13 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
           </div>
         ) : null}
 
-        {showControls && cur?.type === 'clip' && (
+        {showControls && (cur?.type === 'clip' || cur?.type === 'break') && (
           <div className="pl-bar" style={{
             position: 'absolute', bottom: 0, left: 0, right: 0, padding: '28px 20px 14px',
             background: 'linear-gradient(transparent, rgba(0,0,0,.55) 35%, rgba(0,0,0,.9))',
             display: 'flex', flexDirection: 'column', gap: 10,
           }}>
-            <div className="pl-seek" onPointerDown={onSeekDown}>
+            <div className="pl-seek" onPointerDown={onSeekDown} hidden={cur?.type !== 'clip'}>
               <div className="pl-seek-track">
                 <div className="pl-seek-fill" style={{ width: `${duration ? (progress / duration) * 100 : 0}%` }}>
                   <span className="pl-seek-knob" />
@@ -1837,6 +2079,18 @@ export default function App() {
   const [rawClips, setClips] = useState(() => loadLS('ft_clips', []));
   // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
+  // 저장된 세션과 재생 대기열
+  const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
+  const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
+
+  // 대기열에 담긴 세션들. 재생 탭이 이걸로 큐를 만든다.
+  const playlistEntries = useMemo(
+    () => playlist.map(p => {
+      const ses = sessions.find(x => x.id === p.sessionId);
+      return ses ? { ...ses, breakAfter: p.breakAfter } : null;
+    }).filter(Boolean),
+    [playlist, sessions],
+  );
 
   const clips = useMemo(
     () => rawClips.map(c => {
@@ -2087,10 +2341,14 @@ export default function App() {
         api.loadData('ft_customers'),
         api.loadData('ft_blocks'),
         api.loadData('ft_clip_attrs'),
-      ]).then(([cust, blks, attrs]) => {
+        api.loadData('ft_sessions'),
+        api.loadData('ft_playlist'),
+      ]).then(([cust, blks, attrs, ses, pl]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
+        if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
+        if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
       }).catch(() => {});
     }
 
@@ -2133,7 +2391,12 @@ export default function App() {
         {tab === 'builder' && (
           <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
-        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} onConvertOne={convertOne}
+        {tab === 'queue' && (
+          <QueueTab sessions={sessions} setSessions={setSessions}
+            playlist={playlist} setPlaylist={setPlaylist} blocks={blocks} setTab={setTab} />
+        )}
+        {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
+            playbackMap={playbackMap} onConvertOne={convertOne}
             onReport={setPlayerState} registerApi={registerPlayerApi} />}
       </div>
     </div>

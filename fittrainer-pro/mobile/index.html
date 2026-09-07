@@ -49,6 +49,12 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
 .bar>div{height:100%;background:var(--accent);border-radius:2px;transition:width .4s}
 .now.resting{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.35)}
 .now.resting .title{color:var(--warn)}
+.now.breaking{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.35)}
+.now.breaking .title{color:#22C55E}
+.now .next{margin-top:10px;font-size:13px;color:var(--text)}
+.now .next b{color:#22C55E}
+.item.brk{background:rgba(34,197,94,.10);border-color:rgba(34,197,94,.30);
+  color:#22C55E;font-weight:600}
 .times{display:flex;gap:14px;margin-top:10px;font-size:12px;color:var(--dim);
   font-variant-numeric:tabular-nums;flex-wrap:wrap}
 .times b{color:var(--text);font-weight:600}
@@ -261,7 +267,10 @@ const mmss = s => { s = Math.max(0, Math.round(s || 0));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const human = s => { s = Math.max(0, Math.round(s || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}시간 ${m}분` : m > 0 ? `${m}분 ${s % 60}초` : `${s}초`; };
+  const r = s % 60;
+  if (h > 0) return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+  if (m > 0) return r > 0 ? `${m}분 ${r}초` : `${m}분`;
+  return `${r}초`; };
 let socket = null, editing = false, lastState = null, tick = {};
 let screen = 'remote', custDraft = {}, libFilter = '';
 
@@ -514,6 +523,8 @@ function renderTime() {
 
   if (cur?.type === 'rest' && tick.restCountdown != null) {
     $('now-title').textContent = `${tick.restCountdown}초`;
+  } else if (cur?.type === 'break' && tick.restCountdown != null) {
+    $('now-title').textContent = mmss(tick.restCountdown);
   }
 
   const total = s.totalSeconds || 0;
@@ -550,9 +561,10 @@ function render(s) {
 
   const now = $('now');
   now.classList.toggle('resting', cur?.type === 'rest');
+  now.classList.toggle('breaking', cur?.type === 'break');
   if (cur?.type === 'clip') {
     const c = cur.clip || {};
-    $('now-lab').textContent = '현재 동작';
+    $('now-lab').textContent = cur.sessionName ? `현재 동작 · ${cur.sessionName}` : '현재 동작';
     $('now-title').textContent = c.name || c.fileName || '—';
     const [label, color] = CAT[c.code] || [];
     $('now-meta').innerHTML =
@@ -560,6 +572,12 @@ function render(s) {
       + (c.part ? `<span>${c.part}</span>` : '')
       + (c.reps ? `<span>${c.reps}회</span>` : '')
       + (cur.totalSets > 1 ? `<span>세트 ${cur.setNum}/${cur.totalSets}</span>` : '');
+  } else if (cur?.type === 'break') {
+    $('now-lab').textContent = '세션 간 휴식';
+    $('now-title').textContent = mmss(tick.restCountdown ?? cur.duration);
+    $('now-meta').innerHTML =
+      `<span>${cur.sessionName || '세션'} 완료</span>`
+      + `<span class="chip" style="background:#22C55E22;color:#22C55E">다음 · ${cur.nextName || ''}</span>`;
   } else if (cur?.type === 'rest') {
     $('now-lab').textContent = cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식';
     $('now-title').textContent = `${tick.restCountdown ?? cur.duration}초`;
@@ -580,6 +598,10 @@ function render(s) {
 
   $('list').innerHTML = q.map((it, i) => {
     const cls = i === ci ? 'active' : i < ci ? 'done' : '';
+    if (it.type === 'break') {
+      return `<div class="item brk ${cls}" data-i="${i}"><span class="idx">◆</span>
+        <span class="nm">세션 간 휴식 ${human(it.duration)} · 다음 ${it.nextName || ''}</span></div>`;
+    }
     if (it.type === 'rest') {
       return `<div class="item rest ${cls}" data-i="${i}"><span class="idx">·</span>
         <span class="nm">${it.restKind === 'set' ? '세트 휴식' : '전환 휴식'} ${it.duration}초</span></div>`;
