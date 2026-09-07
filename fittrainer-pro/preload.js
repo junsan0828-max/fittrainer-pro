@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   probeClips: (filePaths) => ipcRenderer.invoke('probe-clips', filePaths),
   convertClips: (filePaths) => ipcRenderer.invoke('convert-clips', filePaths),
   getPlaybackPaths: (filePaths) => ipcRenderer.invoke('get-playback-paths', filePaths),
+  getRemoteInfo: () => ipcRenderer.invoke('get-remote-info'),
+  setRemotePin: (pin) => ipcRenderer.invoke('set-remote-pin', pin),
+  revokeRemoteDevices: () => ipcRenderer.invoke('revoke-remote-devices'),
   onProbeProgress: (callback) => {
     const h = (_e, p) => callback(p);
     ipcRenderer.on('probe-progress', h);

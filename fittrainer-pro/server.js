@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -11,7 +12,88 @@ const io = new Server(server, { cors: { origin: '*' } });
 
 const PORT = 3737;
 
+// ---------------------------------------------------------------------------
+// 원격 조작 인증
+// 같은 네트워크의 아무 기기나 세션을 조작하지 못하도록 PIN 으로 막는다.
+// HTTP 평문이라 도청까지 막지는 못한다. 체육관 내부망 기준의 보호 수준이다.
+// ---------------------------------------------------------------------------
+let authFile = null;
+let auth = null;
+
+function loadAuth() {
+  if (auth) return auth;
+  try {
+    const { app: electronApp } = require('electron');
+    authFile = path.join(electronApp.getPath('userData'), 'remote-auth.json');
+    auth = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  } catch {
+    auth = null;
+  }
+  if (!auth || !auth.pin) {
+    auth = { pin: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), tokens: [] };
+    saveAuth();
+  }
+  auth.tokens = auth.tokens || [];
+  return auth;
+}
+
+function saveAuth() {
+  try { fs.writeFileSync(authFile, JSON.stringify(auth), 'utf8'); } catch {}
+}
+
+function getPin() { return loadAuth().pin; }
+
+function setPin(pin) {
+  loadAuth();
+  auth.pin = String(pin);
+  auth.tokens = []; // PIN 을 바꾸면 기존 기기는 다시 로그인해야 한다
+  saveAuth();
+  io.disconnectSockets();
+  return auth.pin;
+}
+
+function issueToken() {
+  loadAuth();
+  const token = crypto.randomBytes(24).toString('hex');
+  auth.tokens.push(token);
+  if (auth.tokens.length > 20) auth.tokens.shift();
+  saveAuth();
+  return token;
+}
+
+function validToken(token) {
+  return !!token && loadAuth().tokens.includes(token);
+}
+
+function revokeAll() {
+  loadAuth();
+  auth.tokens = [];
+  saveAuth();
+  io.disconnectSockets();
+}
+
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'mobile')));
+
+app.post('/api/login', (req, res) => {
+  const pin = String(req.body?.pin || '');
+  // 타이밍 공격을 피하려고 길이를 맞춘 뒤 상수 시간 비교한다
+  const expected = Buffer.from(getPin());
+  const given = Buffer.from(pin.padEnd(expected.length).slice(0, expected.length));
+  if (pin.length !== expected.length || !crypto.timingSafeEqual(expected, given)) {
+    return res.status(401).json({ error: 'PIN 이 일치하지 않습니다' });
+  }
+  res.json({ token: issueToken() });
+});
+
+app.get('/api/session', (req, res) => {
+  res.json({ ok: validToken(req.headers['x-remote-token']) });
+});
+
+io.use((socket, next) => {
+  if (validToken(socket.handshake.auth?.token)) return next();
+  next(new Error('unauthorized'));
+});
 
 // Serve local video files with range request support
 app.get('/localvideo', (req, res) => {
@@ -94,4 +176,19 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Server] http://${ip}:${PORT}`);
 });
 
-module.exports = { getIO, updateState, setLibraryRoot };
+// 접속 주소를 구한다. 폰이 붙어야 하므로 루프백이 아닌 LAN 주소가 필요하다.
+function getLocalIp() {
+  for (const iface of Object.values(os.networkInterfaces())) {
+    for (const cfg of iface || []) {
+      if (cfg.family === 'IPv4' && !cfg.internal) return cfg.address;
+    }
+  }
+  return null;
+}
+
+function getRemoteInfo() {
+  const ip = getLocalIp();
+  return { url: ip ? `http://${ip}:${PORT}` : null, ip, port: PORT, pin: getPin() };
+}
+
+module.exports = { getIO, updateState, setLibraryRoot, getRemoteInfo, setPin, revokeAll };

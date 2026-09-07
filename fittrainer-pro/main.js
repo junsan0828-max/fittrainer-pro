@@ -184,6 +184,27 @@ ipcMain.handle('get-playback-paths', (_e, filePaths) => {
   return map;
 });
 
+// 폰에서 접속할 주소와 PIN, 그리고 바로 찍을 수 있는 QR
+ipcMain.handle('get-remote-info', async () => {
+  const info = getRemoteInfo();
+  let qr = null;
+  if (info.url) {
+    try {
+      qr = await require('qrcode').toDataURL(info.url, {
+        width: 320, margin: 1, color: { dark: '#0A0A0C', light: '#FFFFFF' },
+      });
+    } catch {}
+  }
+  return { ...info, qr };
+});
+
+ipcMain.handle('set-remote-pin', (_e, pin) => {
+  if (!/^\d{4,8}$/.test(String(pin))) throw new Error('PIN 은 숫자 4~8자리여야 합니다');
+  return setPin(pin);
+});
+
+ipcMain.handle('revoke-remote-devices', () => { revokeAll(); return true; });
+
 ipcMain.on('window-minimize', () => mainWindow?.minimize());
 ipcMain.on('window-maximize', () => {
   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
@@ -191,7 +212,7 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => mainWindow?.close());
 
-const { getIO, updateState, setLibraryRoot } = require('./server');
+const { getIO, updateState, setLibraryRoot, getRemoteInfo, setPin, revokeAll } = require('./server');
 ipcMain.on('player-state', (_e, state) => {
   updateState(state);
   const io = getIO();

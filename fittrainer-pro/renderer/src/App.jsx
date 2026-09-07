@@ -761,6 +761,90 @@ function CustomersTab({ customers, setCustomers, setTab, setActiveCustomer, setS
   );
 }
 
+// 폰으로 세션을 조작하기 위한 접속 정보. QR 을 찍으면 바로 리모컨이 열린다.
+function RemotePanel() {
+  const [info, setInfo] = useState(null);
+  const [pinDraft, setPinDraft] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const load = useCallback(() => {
+    window.electronAPI?.getRemoteInfo?.().then(setInfo).catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  if (!info) return null;
+
+  async function savePin() {
+    try {
+      await window.electronAPI.setRemotePin(pinDraft);
+      setPinDraft(''); setMsg('PIN 을 바꿨습니다. 폰에서 다시 로그인하세요.');
+      load();
+    } catch (e) {
+      setMsg(e?.message || 'PIN 을 바꾸지 못했습니다');
+    }
+  }
+
+  async function revoke() {
+    await window.electronAPI.revokeRemoteDevices();
+    setMsg('연결된 기기를 모두 해제했습니다.');
+  }
+
+  return (
+    <div style={{
+      marginTop: 20, padding: 16, borderRadius: 10,
+      background: T.panel, border: `1px solid ${T.border}`,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>스마트폰 원격 조작</div>
+      <div style={{ fontSize: 12, color: T.dim, marginBottom: 14, lineHeight: 1.6 }}>
+        폰이 이 PC 와 같은 와이파이에 있어야 합니다.
+      </div>
+
+      {!info.url ? (
+        <div style={{ fontSize: 12, color: '#F59E0B' }}>
+          네트워크에 연결되어 있지 않아 접속 주소를 만들 수 없습니다.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          {info.qr && (
+            <img src={info.qr} alt="원격 접속 QR 코드" width={132} height={132}
+              style={{ borderRadius: 8, background: '#fff', flexShrink: 0 }} />
+          )}
+          <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 3 }}>접속 주소</div>
+              <div style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                {info.url}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 3 }}>PIN</div>
+              <div style={{
+                fontSize: 24, fontWeight: 700, letterSpacing: 5,
+                color: T.accent, fontVariantNumeric: 'tabular-nums',
+              }}>{info.pin}</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input value={pinDraft} onChange={e => setPinDraft(e.target.value.replace(/\D/g, ''))}
+                placeholder="새 PIN (숫자 4~8자리)" maxLength={8}
+                style={{ width: 170, fontVariantNumeric: 'tabular-nums' }} />
+              <button onClick={savePin} disabled={pinDraft.length < 4} style={{
+                padding: '8px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                background: pinDraft.length < 4 ? T.border : T.accent,
+                color: pinDraft.length < 4 ? T.dim : '#fff',
+              }}>PIN 변경</button>
+              <button onClick={revoke} style={{
+                padding: '8px 14px', borderRadius: 6, fontSize: 12,
+                background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+              }}>기기 연결 해제</button>
+            </div>
+            {msg && <div style={{ fontSize: 12, color: T.accent }}>{msg}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blocks, setBlocks, setTab }) {
   const [generating, setGenerating] = useState(false);
   const [aiError, setAiError] = useState('');
@@ -973,6 +1057,8 @@ ${Object.entries(libSummary).map(([k,v]) => `[${k}] ${v.join(', ')}`).join('\n')
           onChange={e => localStorage.setItem('ft_api_key', e.target.value)}
           style={{ width: '100%' }} />
       </div>
+
+      <RemotePanel />
 
       {aiError && <div style={{ color: '#E84040', fontSize: 12, marginBottom: 8, padding: 8, background: '#E8404011', borderRadius: 6 }}>{aiError}</div>}
 
@@ -1251,7 +1337,7 @@ function expandToQueue(blocks) {
 
 const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
-function PlayerTab({ blocks, playbackMap, onConvertOne }) {
+function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
   const [converting, setConverting] = useState(false);
@@ -1277,15 +1363,15 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
     setRestCountdown(0);
   }, [blocks]);
 
+  // 재생 상태는 App 이 모아서 폰으로 보낸다
   useEffect(() => {
-    if (window.electronAPI) {
-      window.electronAPI.sendPlayerState({ playing, queue, currentIndex: ci });
-    }
-  }, [playing, ci, queue]);
+    onReport?.({ playing, queue, currentIndex: ci, speed });
+  }, [playing, ci, queue, speed]);
 
+  // 폰에서 오는 재생 관련 명령은 App 이 여기로 넘겨준다
   useEffect(() => {
-    if (!window.electronAPI) return;
-    return window.electronAPI.onRemote((cmd) => {
+    if (!registerApi) return;
+    registerApi(cmd => {
       switch (cmd.type) {
         case 'toggle': togglePlay(); break;
         case 'play': setPlaying(true); break;
@@ -1294,9 +1380,21 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
         case 'prev': goPrev(); break;
         case 'skip-rest': skipRest(); break;
         case 'speed': if (cmd.v) setSpeed(cmd.v); break;
+        case 'goto':
+          if (cmd.index >= 0 && cmd.index < queue.length) { setCi(cmd.index); setRestCountdown(0); }
+          break;
+        case 'remove':
+          setQueue(q => {
+            const next = q.filter((_, i) => i !== cmd.index);
+            setCi(c => Math.min(c > cmd.index ? c - 1 : c, Math.max(0, next.length - 1)));
+            return next;
+          });
+          break;
+        default: break;
       }
     });
-  }, [ci, queue]);
+    return () => registerApi(null);
+  }, [ci, queue, registerApi]);
 
   const cur = queue[ci];
 
@@ -1713,6 +1811,140 @@ export default function App() {
     return () => { cancelled = true; off?.(); };
   }, [clips]);
 
+  // ---------------------------------------------------------------
+  // 폰 원격 조작
+  // 재생뿐 아니라 고객·세션 설정·프로그램 구성까지 폰에서 다룰 수 있도록
+  // 앱 상태를 통째로 내보내고, 들어온 명령을 여기서 처리한다.
+  // ---------------------------------------------------------------
+  const [playerState, setPlayerState] = useState({ playing: false, queue: [], currentIndex: 0, speed: 1 });
+  const playerCmd = useRef(null);
+  const registerPlayerApi = useCallback(fn => { playerCmd.current = fn; }, []);
+
+  useEffect(() => {
+    window.electronAPI?.sendPlayerState?.({
+      ...playerState,
+      customers,
+      activeCustomerId: activeCustomer?.id || null,
+      sessionCfg,
+      blocks,
+      // 폰에서 동작을 추가할 때 고르는 목록. 재생에 필요없는 필드는 뺀다.
+      clips: clips.map(c => ({ id: c.id, code: c.code, name: c.name, part: c.part, reps: c.reps })),
+    });
+  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips]);
+
+  useEffect(() => {
+    if (!window.electronAPI?.onRemote) return;
+    return window.electronAPI.onRemote(cmd => {
+      const PLAYER = ['toggle','play','pause','next','prev','skip-rest','speed','goto','remove'];
+      if (PLAYER.includes(cmd.type)) { playerCmd.current?.(cmd); return; }
+
+      switch (cmd.type) {
+        case 'customer-select': {
+          const c = customers.find(x => x.id === cmd.id);
+          if (!c) break;
+          setActiveCustomer(c);
+          setSessionCfg(prev => ({ ...prev, focus: c.focusPart || prev.focus }));
+          break;
+        }
+        case 'customer-save': {
+          if (!cmd.customer) break;
+          setCustomers(prev => {
+            const exists = prev.some(x => x.id === cmd.customer.id);
+            const next = exists
+              ? prev.map(x => (x.id === cmd.customer.id ? { ...x, ...cmd.customer } : x))
+              : [...prev, { ...cmd.customer, id: cmd.customer.id || uid() }];
+            saveData('ft_customers', next);
+            return next;
+          });
+          break;
+        }
+        case 'customer-delete':
+          setCustomers(prev => {
+            const next = prev.filter(x => x.id !== cmd.id);
+            saveData('ft_customers', next);
+            return next;
+          });
+          setActiveCustomer(a => (a?.id === cmd.id ? null : a));
+          break;
+
+        case 'session-cfg':
+          setSessionCfg(prev => ({ ...prev, ...(cmd.patch || {}) }));
+          break;
+
+        case 'session-generate':
+          composeToBlocks();
+          break;
+
+        case 'block-add': {
+          const clip = clips.find(c => c.id === cmd.clipId);
+          if (!clip) break;
+          setBlocks(prev => {
+            const next = [...prev, { uid: uid(), clip, sets: 1, restBetweenSets: 20, restAfter: 60 }];
+            saveData('ft_blocks', next);
+            return next;
+          });
+          break;
+        }
+        case 'block-remove':
+          setBlocks(prev => {
+            const next = prev.filter(b => b.uid !== cmd.uid);
+            saveData('ft_blocks', next);
+            return next;
+          });
+          break;
+        case 'block-move':
+          setBlocks(prev => {
+            const i = prev.findIndex(b => b.uid === cmd.uid);
+            const j = i + (cmd.dir === 'up' ? -1 : 1);
+            if (i < 0 || j < 0 || j >= prev.length) return prev;
+            const next = [...prev];
+            [next[i], next[j]] = [next[j], next[i]];
+            saveData('ft_blocks', next);
+            return next;
+          });
+          break;
+        case 'block-update':
+          setBlocks(prev => {
+            const next = prev.map(b => (b.uid === cmd.uid ? { ...b, ...(cmd.patch || {}) } : b));
+            saveData('ft_blocks', next);
+            return next;
+          });
+          break;
+        case 'blocks-clear':
+          setBlocks([]);
+          saveData('ft_blocks', []);
+          break;
+
+        case 'set-tab':
+          if (cmd.tab) setTab(cmd.tab);
+          break;
+        default: break;
+      }
+    });
+  }, [customers, clips, activeCustomer, sessionCfg, blocks]);
+
+  // 폰에서 '자동 조합'을 눌렀을 때. 데스크톱 화면의 조합과 같은 규칙을 쓴다.
+  function composeToBlocks() {
+    const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
+    const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg });
+    const total = r.warmupClips.length + r.mainClips.length + r.coolClips.length;
+    if (total === 0) {
+      window.electronAPI?.sendPlayerState?.({
+        ...playerState, toast: explainEmptyPool(enriched, sessionCfg),
+      });
+      return;
+    }
+    const mk = (list, phase) => list.map(clip => ({
+      uid: uid(), clip, phase,
+      sets: phase === 'main' ? r.mainSets : 1,
+      restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
+      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : r.restAfter,
+    }));
+    const next = [...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown')];
+    setBlocks(next);
+    saveData('ft_blocks', next);
+  }
+
   // 재생 도중 실패한 영상 한 개를 즉시 변환한다
   async function convertOne(filePath) {
     const api = window.electronAPI;
@@ -1802,7 +2034,8 @@ export default function App() {
         {tab === 'builder' && (
           <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
-        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} onConvertOne={convertOne} />}
+        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} onConvertOne={convertOne}
+            onReport={setPlayerState} registerApi={registerPlayerApi} />}
       </div>
     </div>
   );
