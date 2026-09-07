@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const transcode = require('./transcode');
 
 const VALID_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
 const CATEGORY_CODES = ['STR', 'MOV', 'CFR', 'CFS', 'CCB', 'CCS', 'STT', 'CAR'];
@@ -65,6 +66,7 @@ function scanFolder(folderPath) {
           duration: 0,
           url: `http://localhost:${VIDEO_PORT}/localvideo?path=${encodeURIComponent(fullPath)}`,
           filePath: fullPath,
+          playbackPath: transcode.hasConverted(fullPath) || fullPath,
         });
       }
     }
@@ -128,6 +130,7 @@ ipcMain.handle('rescan-folder', async () => {
 
 ipcMain.handle('get-library-folder', () => libraryFolder);
 
+// 앱 시작 시 저장된 폴더 자동 재스캔
 ipcMain.handle('auto-scan-saved-folder', () => {
   const cfg = loadConfig();
   const saved = cfg.libraryFolder;
@@ -135,6 +138,33 @@ ipcMain.handle('auto-scan-saved-folder', () => {
   libraryFolder = saved;
   setLibraryRoot(libraryFolder);
   return { folder: libraryFolder, clips: scanFolder(libraryFolder) };
+});
+
+// 라이브러리 영상의 코덱을 검사해 재생 불가 목록을 돌려준다
+ipcMain.handle('probe-clips', async (_e, filePaths) => {
+  const results = await transcode.probeAll(filePaths, p =>
+    mainWindow?.webContents.send('probe-progress', p));
+  const unsupported = Object.entries(results)
+    .filter(([, r]) => !r.ok)
+    .map(([filePath, r]) => ({ filePath, video: r.video, audio: r.audio }));
+  return { results, unsupported };
+});
+
+// 재생 불가 영상을 H.264 로 변환하고, 변환된 경로 맵을 돌려준다
+ipcMain.handle('convert-clips', async (_e, filePaths) => {
+  const { done, failed } = await transcode.convertAll(filePaths, p =>
+    mainWindow?.webContents.send('convert-progress', p));
+  return { done, failed };
+});
+
+// 이미 변환해 둔 파일들의 재생 경로 맵
+ipcMain.handle('get-playback-paths', (_e, filePaths) => {
+  const map = {};
+  for (const fp of filePaths) {
+    const converted = transcode.hasConverted(fp);
+    if (converted) map[fp] = converted;
+  }
+  return map;
 });
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize());

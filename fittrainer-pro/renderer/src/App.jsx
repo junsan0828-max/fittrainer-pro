@@ -40,9 +40,11 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
 // 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
-function clipSrc(clip) {
+function clipSrc(clip, playbackMap) {
   if (!clip) return '';
-  const p = clip.filePath || clip.id;
+  const orig = clip.filePath || clip.id;
+  // 변환해 둔 H.264 사본이 있으면 그쪽을 재생한다
+  const p = (orig && playbackMap?.[orig]) || clip.playbackPath || orig;
   if (!p) return clip.url || '';
   const normalized = String(p).replace(/\\/g, '/');
   // 윈도우 드라이브 문자(C:)는 인코딩하면 안 된다
@@ -136,7 +138,59 @@ function TabBar({ tab, setTab }) {
   );
 }
 
-function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs }) {
+// 재생 불가 코덱 안내와 변환 진행 상황
+function CodecBanner({ codec, onConvert }) {
+  if (!codec || codec.state === 'idle') return null;
+
+  const { state, unsupported, progress } = codec;
+  const wrap = (bg, border, children) => (
+    <div style={{
+      padding: '10px 12px', background: bg, borderBottom: `1px solid ${border}`,
+      display: 'flex', alignItems: 'center', gap: 10, fontSize: 12,
+    }}>{children}</div>
+  );
+
+  if (state === 'probing') {
+    return wrap(T.panel, T.border, (
+      <span style={{ color: T.dim }}>
+        영상 형식 확인 중... {progress ? `${progress.index + 1}/${progress.total}` : ''}
+      </span>
+    ));
+  }
+
+  if (state === 'converting') {
+    const pct = progress?.total ? Math.round((progress.index / progress.total) * 100) : 0;
+    return wrap('rgba(245,158,11,.10)', 'rgba(245,158,11,.35)', (
+      <>
+        <span style={{ color: '#F59E0B', fontWeight: 600 }}>
+          변환 중 {progress ? `${progress.index + 1}/${progress.total}` : ''} ({pct}%)
+        </span>
+        <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(245,158,11,.20)' }}>
+          <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: '#F59E0B', transition: 'width .3s' }} />
+        </div>
+        <span style={{ color: T.dim }}>창을 닫지 마세요</span>
+      </>
+    ));
+  }
+
+  if (!unsupported?.length) return null;
+
+  const codecs = [...new Set(unsupported.map(u => u.video).filter(Boolean))].join(', ');
+  return wrap('rgba(248,113,113,.10)', 'rgba(248,113,113,.35)', (
+    <>
+      <span style={{ color: '#F87171', fontWeight: 600 }}>
+        재생할 수 없는 영상 {unsupported.length}개
+      </span>
+      {codecs && <span style={{ color: T.dim }}>({codecs} 코덱)</span>}
+      <button onClick={onConvert} style={{
+        marginLeft: 'auto', padding: '6px 14px', borderRadius: 6,
+        background: '#F87171', color: '#fff', fontSize: 12, fontWeight: 600,
+      }}>H.264로 변환</button>
+    </>
+  ));
+}
+
+function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert }) {
   const [filter, setFilter] = useState('');
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -215,6 +269,8 @@ function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone
             {clips.length}개 영상
           </div>
         </div>
+
+        <CodecBanner codec={codec} onConvert={onConvert} />
         <div style={{ padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="검색..." style={{ width: '100%', marginBottom: 8 }} />
@@ -996,7 +1052,7 @@ function expandToQueue(blocks) {
 
 const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
-function PlayerTab({ blocks }) {
+function PlayerTab({ blocks, playbackMap }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
   const [ci, setCi] = useState(0);
@@ -1148,7 +1204,7 @@ function PlayerTab({ blocks }) {
         {cur?.type === 'clip' ? (
           <>
             <video ref={videoRef} key={cur.clip?.filePath || cur.clip?.url || ci}
-              src={clipSrc(cur.clip)} onEnded={handleVideoEnded}
+              src={clipSrc(cur.clip, playbackMap)} onEnded={handleVideoEnded}
               onError={handleVideoError} onClick={togglePlay}
               style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
             {videoErr && (
@@ -1159,7 +1215,7 @@ function PlayerTab({ blocks }) {
               }}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: '#F87171' }}>{videoErr}</div>
                 <div style={{ fontSize: 12, color: T.dim, wordBreak: 'break-all' }}>{cur.clip?.fileName || ''}</div>
-                <div style={{ fontSize: 11, color: T.dim, wordBreak: 'break-all' }}>{clipSrc(cur.clip)}</div>
+                <div style={{ fontSize: 11, color: T.dim, wordBreak: 'break-all' }}>{clipSrc(cur.clip, playbackMap)}</div>
               </div>
             )}
           </>
@@ -1275,10 +1331,60 @@ export default function App() {
   const [clipAttrs, setClipAttrs] = useState(() => loadLS('ft_clip_attrs', {}));
   const [activeCustomer, setActiveCustomer] = useState(null);
   const [analysisDone, setAnalysisDone] = useState(() => loadLS('ft_analysis_done', false));
+  // 원본 경로 -> 변환된 H.264 경로
+  const [playbackMap, setPlaybackMap] = useState({});
+  const [codec, setCodec] = useState({ state: 'idle', unsupported: [], progress: null });
   const [sessionCfg, setSessionCfg] = useState({
     duration: 30, intensity: '중강도', focus: '전신',
     condition: '보통', includeCats: [], method: 'auto',
   });
+
+  // 라이브러리가 바뀌면 코덱을 검사해 재생 불가 영상을 찾아둔다
+  useEffect(() => {
+    const api = window.electronAPI;
+    const paths = clips.map(c => c.filePath).filter(Boolean);
+    if (!api?.probeClips || paths.length === 0) return;
+
+    let cancelled = false;
+    api.getPlaybackPaths?.(paths).then(map => {
+      if (!cancelled && map) setPlaybackMap(prev => ({ ...prev, ...map }));
+    }).catch(() => {});
+
+    setCodec({ state: 'probing', unsupported: [], progress: { index: 0, total: paths.length } });
+    const off = api.onProbeProgress?.(p => {
+      if (!cancelled) setCodec(c => (c.state === 'probing' ? { ...c, progress: p } : c));
+    });
+    api.probeClips(paths)
+      .then(({ unsupported }) => {
+        if (!cancelled) setCodec({ state: 'done', unsupported: unsupported || [], progress: null });
+      })
+      .catch(() => {
+        if (!cancelled) setCodec({ state: 'idle', unsupported: [], progress: null });
+      })
+      .finally(() => off?.());
+
+    return () => { cancelled = true; off?.(); };
+  }, [clips]);
+
+  async function convertUnsupported() {
+    const api = window.electronAPI;
+    const paths = codec.unsupported.map(u => u.filePath);
+    if (!api?.convertClips || paths.length === 0) return;
+
+    setCodec(c => ({ ...c, state: 'converting', progress: { index: 0, total: paths.length } }));
+    const off = api.onConvertProgress?.(p => setCodec(c => ({ ...c, progress: p })));
+    try {
+      const { done, failed } = await api.convertClips(paths);
+      setPlaybackMap(prev => ({ ...prev, ...done }));
+      const stillBad = codec.unsupported.filter(u => failed?.[u.filePath]);
+      setCodec({ state: 'done', unsupported: stillBad, progress: null });
+      if (stillBad.length) alert(`${stillBad.length}개 영상은 변환하지 못했습니다.`);
+    } catch {
+      setCodec(c => ({ ...c, state: 'done', progress: null }));
+    } finally {
+      off?.();
+    }
+  }
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -1321,7 +1427,8 @@ export default function App() {
               setBlocks(prev => { const next = [...prev, block]; saveData('ft_blocks', next); return next; });
             }}
             analysisDone={analysisDone} setAnalysisDone={setAnalysisDone}
-            clipAttrs={clipAttrs} setClipAttrs={setClipAttrs} />
+            clipAttrs={clipAttrs} setClipAttrs={setClipAttrs}
+            codec={codec} onConvert={convertUnsupported} />
         )}
         {tab === 'customers' && (
           <CustomersTab customers={customers} setCustomers={setCustomers}
@@ -1334,7 +1441,7 @@ export default function App() {
         {tab === 'builder' && (
           <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
-        {tab === 'player' && <PlayerTab blocks={blocks} />}
+        {tab === 'player' && <PlayerTab blocks={blocks} playbackMap={playbackMap} />}
       </div>
     </div>
   );
