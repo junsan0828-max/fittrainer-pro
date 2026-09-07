@@ -10,6 +10,10 @@ const VIDEO_PORT = 3737;
 let mainWindow;
 let libraryFolder = null;
 
+// Windows 의 하드웨어 HEVC 디코더를 쓸 수 있게 한다.
+// GPU 와 'HEVC 비디오 확장' 이 갖춰진 PC 에서는 H.265 원본이 변환 없이 바로 재생된다.
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
+
 function configPath() { return path.join(app.getPath('userData'), 'ft-config.json'); }
 function loadConfig() {
   try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { return {}; }
@@ -140,14 +144,11 @@ ipcMain.handle('auto-scan-saved-folder', () => {
   return { folder: libraryFolder, clips: scanFolder(libraryFolder) };
 });
 
-// 라이브러리 영상의 코덱을 검사해 재생 불가 목록을 돌려준다
+// 라이브러리 영상의 코덱을 읽어 돌려준다. 재생 가능 판정은 렌더러가 한다.
 ipcMain.handle('probe-clips', async (_e, filePaths) => {
   const results = await transcode.probeAll(filePaths, p =>
     mainWindow?.webContents.send('probe-progress', p));
-  const unsupported = Object.entries(results)
-    .filter(([, r]) => !r.ok)
-    .map(([filePath, r]) => ({ filePath, video: r.video, audio: r.audio }));
-  return { results, unsupported };
+  return { results };
 });
 
 // 재생 불가 영상을 H.264 로 변환하고, 변환된 경로 맵을 돌려준다

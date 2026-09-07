@@ -58,8 +58,10 @@ function probe(filePath) {
       try { streams = JSON.parse(stdout).streams || []; } catch {}
       const video = streams.find(s => s.codec_type === 'video')?.codec_name || null;
       const audio = streams.find(s => s.codec_type === 'audio')?.codec_name || null;
-      const ok = !!video && OK_VIDEO.includes(video) && (!audio || OK_AUDIO.includes(audio));
-      resolve({ ok, video, audio });
+      // 영상 코덱의 최종 판정은 렌더러가 canPlayType 으로 내린다.
+      // 하드웨어 디코더 유무에 따라 PC 마다 달라지기 때문이다.
+      const audioOk = !audio || OK_AUDIO.includes(audio);
+      resolve({ ok: !!video && OK_VIDEO.includes(video) && audioOk, video, audio, audioOk });
     });
   });
 }

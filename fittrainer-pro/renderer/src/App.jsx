@@ -40,6 +40,28 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
 // 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
+// ffprobe 가 알려준 코덱 이름을 브라우저가 아는 MIME 으로 옮긴다
+const CODEC_MIME = {
+  h264: 'video/mp4; codecs="avc1.42E01E"',
+  hevc: 'video/mp4; codecs="hvc1.1.6.L93.B0"',
+  av1: 'video/mp4; codecs="av01.0.05M.08"',
+  vp8: 'video/webm; codecs="vp8"',
+  vp9: 'video/webm; codecs="vp9"',
+  mpeg4: 'video/mp4; codecs="mp4v.20.8"',
+  theora: 'video/ogg; codecs="theora"',
+};
+
+// 이 PC 에서 실제로 재생 가능한지 묻는다.
+// 같은 H.265 라도 하드웨어 디코더가 있는 PC 에서는 그대로 재생된다.
+let _probeVideo = null;
+function canPlayCodec(name) {
+  if (!name) return false;
+  const mime = CODEC_MIME[name];
+  if (!mime) return false;
+  _probeVideo = _probeVideo || document.createElement('video');
+  return _probeVideo.canPlayType(mime) !== '';
+}
+
 function clipSrc(clip, playbackMap) {
   if (!clip) return '';
   const orig = clip.filePath || clip.id;
@@ -1355,8 +1377,12 @@ export default function App() {
       if (!cancelled) setCodec(c => (c.state === 'probing' ? { ...c, progress: p } : c));
     });
     api.probeClips(paths)
-      .then(({ unsupported }) => {
-        if (!cancelled) setCodec({ state: 'done', unsupported: unsupported || [], progress: null });
+      .then(({ results }) => {
+        if (cancelled) return;
+        const unsupported = Object.entries(results || {})
+          .filter(([, r]) => !r.converted && (!canPlayCodec(r.video) || r.audioOk === false))
+          .map(([filePath, r]) => ({ filePath, video: r.video, audio: r.audio }));
+        setCodec({ state: 'done', unsupported, progress: null });
       })
       .catch(() => {
         if (!cancelled) setCodec({ state: 'idle', unsupported: [], progress: null });
