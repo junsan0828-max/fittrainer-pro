@@ -40,10 +40,33 @@ function uid() { return Math.random().toString(36).slice(2, 10); }
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
 // 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
-// 파일명 맨 앞 토큰을 분류 접두어로 본다.
+// 파일명 맨 앞의 영문 토큰을 분류 접두어로 본다.
 // "AE 팔벌려뛰기(외발). 전신. 020.mp4" -> "AE",  "STR_하체_스쿼트_12.mp4" -> "STR"
 function filePrefix(fileName) {
-  return (fileName || '').match(/^[A-Za-z0-9가-힣]+/)?.[0]?.toUpperCase() || '';
+  return (fileName || '').match(/^[A-Za-z]+/)?.[0]?.toUpperCase() || '';
+}
+
+// 현장에서 쓰는 접두어를 앱 카테고리에 미리 연결해 둔다.
+// 라이브러리 탭에서 사용자가 덮어쓸 수 있다.
+const DEFAULT_PREFIX_CATS = {
+  AE: 'CAR',   // 에어로빅
+  AES: 'CAR',  // 에어로빅 스트렝스
+  COB: 'CCB',  // 코어밸런스
+  COS: 'CCS',  // 코어스트렝스
+  EX: 'MOV',   // 움직임
+  MU: 'STR',   // 근력운동
+  ST: 'STT',   // 스트레칭
+  STF: 'CFS',  // 스트레칭 폼롤러
+};
+
+// 사용자 지정 > 기본 매핑 > 접두어 자체가 카테고리 코드인 경우
+function resolveCode(clip, prefixCats) {
+  if (clip.code) return clip.code;
+  const p = filePrefix(clip.fileName);
+  if (!p) return '';
+  if (prefixCats?.[p]) return prefixCats[p];
+  if (DEFAULT_PREFIX_CATS[p]) return DEFAULT_PREFIX_CATS[p];
+  return CAT_MAP[p] ? p : '';
 }
 
 // ffprobe 가 알려준 코덱 이름을 브라우저가 아는 MIME 으로 옮긴다
@@ -190,53 +213,69 @@ function explainEmptyPool(enriched, sessionCfg) {
 // 카테고리가 비어 있는 클립들을 파일명 접두어별로 묶어 한 번에 분류하게 한다.
 // 분류가 안 된 클립은 자동 조합에서 통째로 제외되므로 눈에 띄게 알려야 한다.
 function PrefixMapper({ clips, prefixCats, setPrefixCat }) {
+  const [open, setOpen] = useState(false);
+
   const groups = useMemo(() => {
     const m = {};
     for (const c of clips) {
-      if (c.code) continue;
       const p = filePrefix(c.fileName);
       if (!p) continue;
-      (m[p] = m[p] || []).push(c);
+      (m[p] = m[p] || { code: c.code, count: 0, sample: c.fileName }).count++;
     }
-    return Object.entries(m).sort((a, b) => b[1].length - a[1].length);
+    return Object.entries(m).sort((a, b) => b[1].count - a[1].count);
   }, [clips]);
 
   if (groups.length === 0) return null;
-  const total = groups.reduce((n, [, list]) => n + list.length, 0);
+
+  const unmapped = groups.filter(([, g]) => !g.code);
+  const missing = unmapped.reduce((n, [, g]) => n + g.count, 0);
+  const show = open || missing > 0;
 
   return (
     <div style={{
       padding: '10px 12px', borderBottom: `1px solid ${T.border}`,
-      background: 'rgba(245,158,11,.08)',
+      background: missing > 0 ? 'rgba(245,158,11,.08)' : 'transparent',
     }}>
-      <div style={{ fontSize: 12, color: '#F59E0B', fontWeight: 600, marginBottom: 8 }}>
-        분류되지 않은 영상 {total}개 — 아래에서 종류를 지정하면 자동 조합에 쓰입니다
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: missing > 0 ? '#F59E0B' : T.dim }}>
+          {missing > 0
+            ? `분류되지 않은 영상 ${missing}개 — 종류를 지정하면 자동 조합에 쓰입니다`
+            : `영상 종류 ${groups.length}가지가 인식되었습니다`}
+        </span>
+        <button onClick={() => setOpen(o => !o)} style={{
+          marginLeft: 'auto', padding: '4px 10px', borderRadius: 4, fontSize: 11,
+          background: T.panel, color: T.text, border: `1px solid ${T.border}`,
+        }}>{show && open ? '접기' : '분류 확인'}</button>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {groups.map(([prefix, list]) => (
-          <div key={prefix} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{
-              fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
-              background: T.panel, color: T.text, minWidth: 44, textAlign: 'center',
-            }}>{prefix}</span>
-            <span style={{ fontSize: 11, color: T.dim, minWidth: 42 }}>{list.length}개</span>
-            <select
-              value={prefixCats[prefix] || ''}
-              onChange={e => setPrefixCat(prefix, e.target.value)}
-              style={{
-                flex: 1, maxWidth: 220, padding: '4px 8px', borderRadius: 4,
-                background: T.panel, color: T.text, border: `1px solid ${T.border}`, fontSize: 12,
-              }}>
-              <option value="">— 종류 선택 —</option>
-              {CATS.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
-            </select>
-            <span style={{
-              fontSize: 11, color: T.dim, flex: 1, overflow: 'hidden',
-              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{list[0]?.fileName}</span>
-          </div>
-        ))}
-      </div>
+
+      {show && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+          {(open ? groups : unmapped).map(([prefix, g]) => (
+            <div key={prefix} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                background: T.panel, color: g.code ? T.text : '#F59E0B',
+                minWidth: 48, textAlign: 'center',
+              }}>{prefix}</span>
+              <span style={{ fontSize: 11, color: T.dim, minWidth: 42 }}>{g.count}개</span>
+              <select
+                value={prefixCats[prefix] || g.code || ''}
+                onChange={e => setPrefixCat(prefix, e.target.value)}
+                style={{
+                  width: 200, padding: '4px 8px', borderRadius: 4,
+                  background: T.panel, color: T.text, border: `1px solid ${T.border}`, fontSize: 12,
+                }}>
+                <option value="">— 종류 선택 —</option>
+                {CATS.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+              </select>
+              <span style={{
+                fontSize: 11, color: T.dim, flex: 1, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{g.sample}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1476,7 +1515,7 @@ export default function App() {
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
 
   const clips = useMemo(
-    () => rawClips.map(c => (c.code ? c : { ...c, code: prefixCats[filePrefix(c.fileName)] || '' })),
+    () => rawClips.map(c => { const code = resolveCode(c, prefixCats); return code === c.code ? c : { ...c, code }; }),
     [rawClips, prefixCats],
   );
 

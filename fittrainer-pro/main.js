@@ -24,6 +24,22 @@ function saveConfig(obj) {
 
 function parseFileName(fileName) {
   const base = path.basename(fileName, path.extname(fileName));
+
+  // "AE 팔벌려뛰기(외발). 전신. 020" — 접두어 + 이름 . 부위 . 횟수
+  const dotted = base.split('.').map(s => s.trim()).filter(Boolean);
+  if (dotted.length >= 2) {
+    const head = dotted[0].match(/^([A-Za-z]+)\s+(.+)$/);
+    if (head) {
+      const prefix = head[1].toUpperCase();
+      return {
+        code: CATEGORY_CODES.includes(prefix) ? prefix : '',
+        part: dotted[1],
+        name: head[2],
+        reps: parseInt(dotted[2], 10) || 0,
+      };
+    }
+  }
+
   const parts = base.split('_');
   if (parts.length >= 4 && CATEGORY_CODES.includes(parts[0])) {
     return {
