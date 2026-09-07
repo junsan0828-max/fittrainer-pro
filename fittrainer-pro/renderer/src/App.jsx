@@ -73,6 +73,37 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
+// 큐 한 항목이 차지하는 시간(초). 영상은 ffprobe 로 읽어둔 길이를 쓴다.
+function itemSeconds(it) {
+  if (!it) return 0;
+  return it.type === 'rest' ? (it.duration || 0) : (it.clip?.duration || 0);
+}
+
+// 전체/경과/남은 시간을 초 단위로 낸다
+function queueTiming(queue, ci, progress, restCountdown) {
+  let total = 0, before = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const sec = itemSeconds(queue[i]);
+    total += sec;
+    if (i < ci) before += sec;
+  }
+  const cur = queue[ci];
+  const inCur = cur?.type === 'rest'
+    ? Math.max(0, (cur.duration || 0) - (restCountdown || 0))
+    : Math.min(progress || 0, itemSeconds(cur));
+  const elapsed = Math.min(before + inCur, total);
+  return { total, elapsed, remaining: Math.max(0, total - elapsed) };
+}
+
+// 사람이 읽는 길이. 1시간이 넘으면 시간까지 쓴다.
+function humanTime(sec) {
+  sec = Math.round(sec || 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
+  if (h > 0) return `${h}시간 ${m}분`;
+  if (m > 0) return `${m}분 ${s2}초`;
+  return `${s2}초`;
+}
+
 function mmss(s) {
   if (!isFinite(s) || s < 0) s = 0;
   const m = Math.floor(s / 60);
@@ -1363,63 +1394,84 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
     setRestCountdown(0);
   }, [blocks]);
 
+  const timing = queueTiming(queue, ci, progress, restCountdown);
+
   // 재생 상태는 App 이 모아서 폰으로 보낸다
   useEffect(() => {
-    onReport?.({ playing, queue, currentIndex: ci, speed });
-  }, [playing, ci, queue, speed]);
+    onReport?.({ playing, queue, currentIndex: ci, speed, totalSeconds: timing.total });
+  }, [playing, ci, queue, speed, timing.total]);
 
-  // 폰에서 오는 재생 관련 명령은 App 이 여기로 넘겨준다
+  // 1초마다 바뀌는 값은 따로 가볍게 보낸다. 큐 전체를 매초 보내지 않기 위해서다.
   useEffect(() => {
-    if (!registerApi) return;
-    registerApi(cmd => {
-      switch (cmd.type) {
-        case 'toggle': togglePlay(); break;
-        case 'play': setPlaying(true); break;
-        case 'pause': setPlaying(false); break;
-        case 'next': goNext(); break;
-        case 'prev': goPrev(); break;
-        case 'skip-rest': skipRest(); break;
-        case 'speed': if (cmd.v) setSpeed(cmd.v); break;
-        case 'goto':
-          if (cmd.index >= 0 && cmd.index < queue.length) { setCi(cmd.index); setRestCountdown(0); }
-          break;
-        case 'remove':
-          setQueue(q => {
-            const next = q.filter((_, i) => i !== cmd.index);
-            setCi(c => Math.min(c > cmd.index ? c - 1 : c, Math.max(0, next.length - 1)));
-            return next;
-          });
-          break;
-        default: break;
-      }
+    window.electronAPI?.sendPlayerTick?.({
+      restCountdown, progress, duration,
+      elapsedSeconds: timing.elapsed, remainingSeconds: timing.remaining,
     });
-    return () => registerApi(null);
-  }, [ci, queue, registerApi]);
+  }, [restCountdown, Math.floor(progress), duration, timing.elapsed]);
+
+  // 폰에서 오는 재생 관련 명령은 App 이 여기로 넘겨준다.
+  // 핸들러를 ref 에 매 렌더 갱신해 두어야 playing 같은 최신 값을 본다.
+  // (의존성 배열에 넣어 재등록하는 방식은 값이 하나라도 빠지면 낡은 값으로 동작한다)
+  const handleRemoteRef = useRef(null);
+  handleRemoteRef.current = cmd => {
+    switch (cmd.type) {
+      case 'toggle': togglePlay(); break;
+      case 'play': setPlaying(true); break;
+      case 'pause': setPlaying(false); break;
+      case 'next': goNext(); break;
+      case 'prev': goPrev(); break;
+      case 'skip-rest': skipRest(); break;
+      case 'speed': if (cmd.v) setSpeed(cmd.v); break;
+      case 'goto':
+        if (cmd.index >= 0 && cmd.index < queue.length) { setCi(cmd.index); setRestCountdown(0); }
+        break;
+      case 'remove':
+        setQueue(q => {
+          const next = q.filter((_, i) => i !== cmd.index);
+          setCi(c => Math.min(c > cmd.index ? c - 1 : c, Math.max(0, next.length - 1)));
+          return next;
+        });
+        break;
+      default: break;
+    }
+  };
+
+  useEffect(() => {
+    registerApi?.(cmd => handleRemoteRef.current?.(cmd));
+    return () => registerApi?.(null);
+  }, [registerApi]);
 
   const cur = queue[ci];
 
   useEffect(() => {
-    if (cur?.type === 'rest') {
-      setRestCountdown(cur.duration);
-      restTimer.current = setInterval(() => {
-        setRestCountdown(prev => {
-          if (prev <= 1) { clearInterval(restTimer.current); goNext(); return 0; }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(restTimer.current);
-    }
+    if (cur?.type !== 'rest') return;
+    setRestCountdown(cur.duration);
   }, [ci, cur?.type]);
+
+  // 휴식 카운트다운. 일시정지하면 같이 멈춘다.
+  useEffect(() => {
+    if (cur?.type !== 'rest' || !playing) return;
+    restTimer.current = setInterval(() => {
+      setRestCountdown(prev => {
+        if (prev <= 1) { clearInterval(restTimer.current); goNext(); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(restTimer.current);
+  }, [ci, cur?.type, playing]);
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.playbackRate = speed;
   }, [speed, ci]);
 
+  // 휴식 구간에는 video 엘리먼트가 없다. 그때도 재생/정지가 먹혀야 한다.
   function togglePlay() {
-    if (!videoRef.current) return;
-    if (playing) videoRef.current.pause();
-    else videoRef.current.play();
-    setPlaying(!playing);
+    const next = !playing;
+    if (videoRef.current) {
+      if (next) videoRef.current.play().catch(() => {});
+      else videoRef.current.pause();
+    }
+    setPlaying(next);
   }
 
   function goNext() {
@@ -1662,6 +1714,17 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
                 fontVariantNumeric: 'tabular-nums', letterSpacing: .2,
               }}>{mmss(progress)} / {mmss(duration)}</span>
 
+              <span style={{
+                fontSize: 12, color: 'rgba(255,255,255,.5)', paddingLeft: 10,
+                marginLeft: 4, borderLeft: '1px solid rgba(255,255,255,.18)',
+                fontVariantNumeric: 'tabular-nums',
+              }}>
+                세션 {mmss(timing.elapsed)} / {mmss(timing.total)}
+                <span style={{ color: '#A78BFA', marginLeft: 8 }}>
+                  남은 {humanTime(timing.remaining)}
+                </span>
+              </span>
+
               <div style={{ flex: 1, minWidth: 12 }} />
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -1755,8 +1818,12 @@ export default function App() {
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
 
   const clips = useMemo(
-    () => rawClips.map(c => { const code = resolveCode(c, prefixCats); return code === c.code ? c : { ...c, code }; }),
-    [rawClips, prefixCats],
+    () => rawClips.map(c => {
+      const code = resolveCode(c, prefixCats);
+      const duration = durations[c.filePath] || c.duration || 0;
+      return code === c.code && duration === c.duration ? c : { ...c, code, duration };
+    }),
+    [rawClips, prefixCats, durations],
   );
 
   function setPrefixCat(prefix, code) {
@@ -1775,6 +1842,8 @@ export default function App() {
   // 원본 경로 -> 변환된 H.264 경로
   const [playbackMap, setPlaybackMap] = useState({});
   const [codec, setCodec] = useState({ state: 'idle', unsupported: [], progress: null });
+  // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
+  const [durations, setDurations] = useState({});
   const [sessionCfg, setSessionCfg] = useState({
     duration: 30, intensity: '중강도', focus: '전신',
     condition: '보통', includeCats: [], method: 'auto',
@@ -1801,6 +1870,9 @@ export default function App() {
         const unsupported = Object.entries(results || {})
           .filter(([, r]) => !r.converted && (!canPlayCodec(r.video) || r.audioOk === false))
           .map(([filePath, r]) => ({ filePath, video: r.video, audio: r.audio }));
+        const secs = {};
+        for (const [fp, r] of Object.entries(results || {})) if (r.duration) secs[fp] = r.duration;
+        setDurations(prev => ({ ...prev, ...secs }));
         setCodec({ state: 'done', unsupported, progress: null });
       })
       .catch(() => {
@@ -1832,9 +1904,10 @@ export default function App() {
     });
   }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips]);
 
-  useEffect(() => {
-    if (!window.electronAPI?.onRemote) return;
-    return window.electronAPI.onRemote(cmd => {
+  // 여기도 최신 상태를 봐야 하므로 ref 로 유지한다
+  const appRemoteRef = useRef(null);
+  appRemoteRef.current = cmd => {
+    {
       const PLAYER = ['toggle','play','pause','next','prev','skip-rest','speed','goto','remove'];
       if (PLAYER.includes(cmd.type)) { playerCmd.current?.(cmd); return; }
 
@@ -1920,8 +1993,13 @@ export default function App() {
           break;
         default: break;
       }
-    });
-  }, [customers, clips, activeCustomer, sessionCfg, blocks]);
+    }
+  };
+
+  useEffect(() => {
+    if (!window.electronAPI?.onRemote) return;
+    return window.electronAPI.onRemote(cmd => appRemoteRef.current?.(cmd));
+  }, []);
 
   // 폰에서 '자동 조합'을 눌렀을 때. 데스크톱 화면의 조합과 같은 규칙을 쓴다.
   function composeToBlocks() {

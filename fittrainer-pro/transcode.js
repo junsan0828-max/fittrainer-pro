@@ -61,19 +61,23 @@ function probe(filePath) {
     if (!FFPROBE) return resolve({ ok: false, video: null, audio: null, audioOk: true, error: MISSING });
     execFile(FFPROBE, [
       '-v', 'error',
-      '-show_entries', 'stream=codec_type,codec_name',
+      '-show_entries', 'stream=codec_type,codec_name:format=duration',
       '-of', 'json',
       filePath,
     ], { timeout: 15000, maxBuffer: 1 << 20 }, (err, stdout) => {
       if (err) return resolve({ ok: false, video: null, audio: null, error: err.message });
-      let streams = [];
-      try { streams = JSON.parse(stdout).streams || []; } catch {}
+      let streams = [], duration = 0;
+      try {
+        const out = JSON.parse(stdout);
+        streams = out.streams || [];
+        duration = Number(out.format?.duration) || 0;
+      } catch {}
       const video = streams.find(s => s.codec_type === 'video')?.codec_name || null;
       const audio = streams.find(s => s.codec_type === 'audio')?.codec_name || null;
       // 영상 코덱의 최종 판정은 렌더러가 canPlayType 으로 내린다.
       // 하드웨어 디코더 유무에 따라 PC 마다 달라지기 때문이다.
       const audioOk = !audio || OK_AUDIO.includes(audio);
-      resolve({ ok: !!video && OK_VIDEO.includes(video) && audioOk, video, audio, audioOk });
+      resolve({ ok: !!video && OK_VIDEO.includes(video) && audioOk, video, audio, audioOk, duration });
     });
   });
 }
@@ -83,7 +87,10 @@ async function probeAll(filePaths, onEach) {
   const results = {};
   for (let i = 0; i < filePaths.length; i++) {
     const fp = filePaths[i];
-    results[fp] = hasConverted(fp) ? { ok: true, converted: true } : await probe(fp);
+    const converted = hasConverted(fp);
+    results[fp] = converted
+      ? { ...(await probe(converted)), ok: true, converted: true }
+      : await probe(fp);
     onEach?.({ index: i, total: filePaths.length, filePath: fp, result: results[fp] });
   }
   return results;

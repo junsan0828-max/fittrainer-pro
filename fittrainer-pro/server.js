@@ -143,6 +143,7 @@ app.get('/localvideo', (req, res) => {
 });
 
 let currentState = { playing: false, queue: [], currentIndex: 0 };
+let currentTick = {};
 let libraryRoot = null;
 
 function setLibraryRoot(folder) { libraryRoot = folder; }
@@ -150,6 +151,7 @@ function setLibraryRoot(folder) { libraryRoot = folder; }
 io.on('connection', (socket) => {
   console.log('[Remote] connected:', socket.id);
   socket.emit('state', currentState);
+  socket.emit('tick', currentTick);
 
   socket.on('command', (cmd) => {
     const { BrowserWindow } = require('electron');
@@ -164,6 +166,7 @@ io.on('connection', (socket) => {
 
 function getIO() { return io; }
 function updateState(state) { currentState = state; }
+function updateTick(tick) { currentTick = tick; }
 
 server.listen(PORT, '0.0.0.0', () => {
   const nets = os.networkInterfaces();
@@ -191,4 +194,4 @@ function getRemoteInfo() {
   return { url: ip ? `http://${ip}:${PORT}` : null, ip, port: PORT, pin: getPin() };
 }
 
-module.exports = { getIO, updateState, setLibraryRoot, getRemoteInfo, setPin, revokeAll };
+module.exports = { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo, setPin, revokeAll };

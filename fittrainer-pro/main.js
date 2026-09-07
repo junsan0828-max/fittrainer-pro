@@ -212,11 +212,18 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => mainWindow?.close());
 
-const { getIO, updateState, setLibraryRoot, getRemoteInfo, setPin, revokeAll } = require('./server');
+const { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo, setPin, revokeAll } = require('./server');
 ipcMain.on('player-state', (_e, state) => {
   updateState(state);
   const io = getIO();
   if (io) io.emit('state', state);
+});
+
+// 매초 바뀌는 값만 따로. 큐 전체를 다시 보내지 않는다.
+ipcMain.on('player-tick', (_e, tick) => {
+  updateTick(tick);
+  const io = getIO();
+  if (io) io.emit('tick', tick);
 });
 
 ipcMain.handle('save-data', (_e, key, value) => {

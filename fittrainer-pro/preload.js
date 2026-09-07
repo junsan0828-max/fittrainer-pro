@@ -5,10 +5,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   rescanFolder: () => ipcRenderer.invoke('rescan-folder'),
   getLibraryFolder: () => ipcRenderer.invoke('get-library-folder'),
   onRemote: (callback) => {
-    ipcRenderer.on('remote-command', (_e, cmd) => callback(cmd));
-    return () => ipcRenderer.removeAllListeners('remote-command');
+    const h = (_e, cmd) => callback(cmd);
+    ipcRenderer.on('remote-command', h);
+    return () => ipcRenderer.removeListener('remote-command', h);
   },
   sendPlayerState: (state) => ipcRenderer.send('player-state', state),
+  sendPlayerTick: (tick) => ipcRenderer.send('player-tick', tick),
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),

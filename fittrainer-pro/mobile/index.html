@@ -49,6 +49,10 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
 .bar>div{height:100%;background:var(--accent);border-radius:2px;transition:width .4s}
 .now.resting{background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.35)}
 .now.resting .title{color:var(--warn)}
+.times{display:flex;gap:14px;margin-top:10px;font-size:12px;color:var(--dim);
+  font-variant-numeric:tabular-nums;flex-wrap:wrap}
+.times b{color:var(--text);font-weight:600}
+.times .left{color:var(--accent);font-weight:600}
 
 /* ---- 컨트롤 ---- */
 .ctl{padding:0 16px;display:flex;flex-direction:column;gap:10px}
@@ -159,6 +163,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
     <div class="title" id="now-title">—</div>
     <div class="meta" id="now-meta"></div>
     <div class="bar"><div id="now-bar" style="width:0%"></div></div>
+    <div class="times" id="now-times"></div>
   </div>
 
   <div class="ctl">
@@ -251,7 +256,13 @@ const CAT={STR:['근력','#E84040'],MOV:['움직임','#9B5CF6'],CFR:['폼롤링'
   STT:['스트레칭','#22C55E'],CAR:['유산소','#84CC16'],TMR:['타이머','#64748B']};
 
 const $ = id => document.getElementById(id);
-let socket = null, editing = false, lastState = null;
+
+const mmss = s => { s = Math.max(0, Math.round(s || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const human = s => { s = Math.max(0, Math.round(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}시간 ${m}분` : m > 0 ? `${m}분 ${s % 60}초` : `${s}초`; };
+let socket = null, editing = false, lastState = null, tick = {};
 let screen = 'remote', custDraft = {}, libFilter = '';
 
 const GOALS = ['체형교정','근력강화','다이어트','재활','균형트레이닝','체력증진'];
@@ -316,6 +327,7 @@ function connect(token) {
     else $('conn').textContent = '재연결 중';
   });
   socket.on('state', render);
+  socket.on('tick', t => { tick = t || {}; renderTime(); });
 }
 
 const send = (type, data) => socket?.emit('command', { type, ...(data || {}) });
@@ -436,7 +448,8 @@ $('sf-gen').onclick = () => { send('session-generate'); toast('조합 중...'); 
 function renderBuilder(s) {
   const blocks = s.blocks || [];
   const PHASE = { warmup: '준비', main: '본운동', cooldown: '정리' };
-  $('bl-count').textContent = `프로그램 · ${blocks.length}개 동작`;
+  $('bl-count').textContent = `프로그램 · ${blocks.length}개 동작`
+    + (s.totalSeconds ? ` · 약 ${human(s.totalSeconds)}` : '');
   $('bl-list').innerHTML = blocks.length ? blocks.map((b, i) => {
     const c = b.clip || {};
     const [, color] = CAT[c.code] || [, '#7A7A86'];
@@ -493,6 +506,27 @@ $('bl-clear').onclick = () => {
   if (confirm('프로그램을 전부 비울까요?')) send('blocks-clear');
 };
 
+// 매초 오는 tick 으로 시간 표시만 갱신한다. 목록은 다시 그리지 않는다.
+function renderTime() {
+  const s = lastState;
+  if (!s || screen !== 'remote') return;
+  const cur = (s.queue || [])[s.currentIndex || 0];
+
+  if (cur?.type === 'rest' && tick.restCountdown != null) {
+    $('now-title').textContent = `${tick.restCountdown}초`;
+  }
+
+  const total = s.totalSeconds || 0;
+  const el = $('now-times');
+  if (!el) return;
+  if (!total) { el.innerHTML = ''; return; }
+  el.innerHTML =
+    `<span>세션 <b>${mmss(tick.elapsedSeconds)}</b> / ${mmss(total)}</span>`
+    + `<span class="left">남은 ${human(tick.remainingSeconds)}</span>`
+    + (cur?.type === 'clip' && tick.duration
+        ? `<span>이 동작 ${mmss(tick.progress)} / ${mmss(tick.duration)}</span>` : '');
+}
+
 /* ---------- 화면 ---------- */
 function render(s) {
   if (!s) return;
@@ -528,7 +562,7 @@ function render(s) {
       + (cur.totalSets > 1 ? `<span>세트 ${cur.setNum}/${cur.totalSets}</span>` : '');
   } else if (cur?.type === 'rest') {
     $('now-lab').textContent = cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식';
-    $('now-title').textContent = `${cur.duration}초`;
+    $('now-title').textContent = `${tick.restCountdown ?? cur.duration}초`;
     $('now-meta').textContent = '';
   } else {
     $('now-lab').textContent = '현재 동작';
@@ -536,6 +570,7 @@ function render(s) {
     $('now-meta').textContent = '';
   }
   $('now-bar').style.width = q.length ? `${((ci + 1) / q.length) * 100}%` : '0%';
+  renderTime();
 
   if (q.length === 0) {
     $('list').innerHTML =
