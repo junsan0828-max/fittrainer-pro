@@ -34,9 +34,65 @@ body,#root{font-family:Inter,-apple-system,sans-serif;background:${T.bg};color:$
 input,textarea,select{font-family:inherit;background:${T.panel};color:${T.text};border:1px solid ${T.border};border-radius:6px;padding:8px 12px;font-size:13px;outline:none}
 input:focus,select:focus{border-color:${T.accent}}
 button{font-family:inherit;cursor:pointer;border:none;outline:none}
+
+/* ---- 플레이어 컨트롤 ---- */
+.pl-bar{animation:plIn .18s ease-out}
+@keyframes plIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.pl-btn{display:flex;align-items:center;justify-content:center;width:36px;height:36px;
+  border-radius:8px;background:transparent;color:rgba(255,255,255,.85);transition:background .15s,color .15s,transform .1s}
+.pl-btn:hover{background:rgba(255,255,255,.14);color:#fff}
+.pl-btn:active{transform:scale(.92)}
+.pl-btn:focus-visible{box-shadow:0 0 0 2px ${T.accent}}
+
+.pl-play{width:46px;height:46px;border-radius:23px;background:${T.accent};color:#fff;
+  box-shadow:0 2px 12px rgba(124,58,237,.45)}
+.pl-play:hover{background:#8B5CF6;color:#fff}
+
+.pl-seek{padding:6px 0;cursor:pointer;touch-action:none}
+.pl-seek-track{position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,.22);
+  transition:height .12s}
+.pl-seek:hover .pl-seek-track{height:6px}
+.pl-seek-fill{position:relative;height:100%;border-radius:2px;background:${T.accent}}
+.pl-seek-knob{position:absolute;right:-6px;top:50%;width:12px;height:12px;border-radius:6px;
+  background:#fff;transform:translateY(-50%) scale(0);transition:transform .12s;
+  box-shadow:0 1px 4px rgba(0,0,0,.5)}
+.pl-seek:hover .pl-seek-knob{transform:translateY(-50%) scale(1)}
+
+.pl-speed{display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,.10)}
+.pl-speed button{padding:4px 9px;border-radius:5px;font-size:11px;font-weight:600;
+  background:transparent;color:rgba(255,255,255,.7);font-variant-numeric:tabular-nums;transition:.15s}
+.pl-speed button:hover{color:#fff;background:rgba(255,255,255,.12)}
+.pl-speed button.on{background:${T.accent};color:#fff}
+
+@media (prefers-reduced-motion:reduce){
+  .pl-bar{animation:none}
+  .pl-btn,.pl-seek-track,.pl-seek-knob,.pl-speed button{transition:none}
+}
 `;
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
+
+function mmss(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+
+// 플레이어 컨트롤 아이콘. 텍스트 기호(>> ||) 대신 또렷하게 보이도록 도형으로 그린다.
+function Icon({ name, size = 20 }) {
+  const p = {
+    play: <path d="M8 5v14l11-7z" />,
+    pause: <path d="M7 5h3.5v14H7zm6.5 0H17v14h-3.5z" />,
+    prev: <path d="M7 6h2.5v12H7zm2.5 6 8.5 6V6z" />,
+    next: <path d="M14.5 6H17v12h-2.5zM14.5 12 6 18V6z" />,
+    expand: <path d="M4 9V4h5v2H6v3zm11-5h5v5h-2V6h-3zM4 15h2v3h3v2H4zm14 0h2v5h-5v-2h3z" />,
+    shrink: <path d="M9 4h2v5H6V7h3zm4 0h2v3h3v2h-5zm0 11h5v2h-3v3h-2zM6 15h5v5H9v-3H6z" />,
+  }[name];
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{p}</svg>
+  );
+}
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
 // 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
@@ -1200,6 +1256,8 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
   const [videoErr, setVideoErr] = useState(null);
   const [converting, setConverting] = useState(false);
   const [convertSec, setConvertSec] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1286,11 +1344,34 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
   }
 
   function goFullscreen() {
-    if (containerRef.current?.requestFullscreen) {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else if (containerRef.current?.requestFullscreen) {
       containerRef.current.requestFullscreen();
       setIsFullscreen(true);
     }
   }
+
+  // 세션 중에는 마우스보다 키보드가 빠르다
+  useEffect(() => {
+    function onKey(e) {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const el = videoRef.current;
+      switch (e.key) {
+        case ' ': e.preventDefault(); togglePlay(); break;
+        case 'ArrowLeft': if (el) el.currentTime = Math.max(0, el.currentTime - 5); break;
+        case 'ArrowRight': if (el) el.currentTime = Math.min(el.duration || 0, el.currentTime + 5); break;
+        case 'f': case 'F': goFullscreen(); break;
+        case 'n': case 'N': goNext(); break;
+        case 'p': case 'P': goPrev(); break;
+        default: return;
+      }
+      setShowControls(true);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   useEffect(() => {
     function onFsChange() { setIsFullscreen(!!document.fullscreenElement); }
@@ -1308,6 +1389,30 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
 
   function handleVideoEnded() {
     goNext();
+  }
+
+  // 진행 바를 누르거나 끌면 그 지점으로 이동한다
+  function onSeekDown(e) {
+    const el = videoRef.current;
+    const track = e.currentTarget;
+    if (!el || !isFinite(el.duration)) return;
+
+    const seekTo = clientX => {
+      const { left, width } = track.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (clientX - left) / width));
+      el.currentTime = ratio * el.duration;
+      setProgress(el.currentTime);
+    };
+
+    seekTo(e.clientX);
+    track.setPointerCapture?.(e.pointerId);
+    const move = ev => seekTo(ev.clientX);
+    const up = () => {
+      track.removeEventListener('pointermove', move);
+      track.removeEventListener('pointerup', up);
+    };
+    track.addEventListener('pointermove', move);
+    track.addEventListener('pointerup', up);
   }
 
   const src = clipSrc(cur?.clip, playbackMap);
@@ -1376,6 +1481,8 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
             <video ref={videoRef} key={src || ci}
               src={src} onEnded={handleVideoEnded}
               onError={handleVideoError} onClick={togglePlay}
+              onTimeUpdate={e => setProgress(e.currentTarget.currentTime)}
+              onLoadedMetadata={e => { setDuration(e.currentTarget.duration || 0); setProgress(0); }}
               style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
             {converting && (
               <div style={{
@@ -1428,36 +1535,71 @@ function PlayerTab({ blocks, playbackMap, onConvertOne }) {
         ) : null}
 
         {showControls && cur?.type === 'clip' && (
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, padding: '16px 20px',
-            background: 'linear-gradient(transparent, rgba(0,0,0,.85))',
-            display: 'flex', alignItems: 'center', gap: 12, transition: 'opacity .3s',
+          <div className="pl-bar" style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, padding: '28px 20px 14px',
+            background: 'linear-gradient(transparent, rgba(0,0,0,.55) 35%, rgba(0,0,0,.9))',
+            display: 'flex', flexDirection: 'column', gap: 10,
           }}>
-            <button onClick={goPrev} style={{ background: 'transparent', color: '#fff', fontSize: 18, padding: '4px 10px' }}>{'<<'}</button>
-            <button onClick={togglePlay} style={{
-              width: 44, height: 44, borderRadius: 22, background: T.accent, color: '#fff',
-              fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>{playing ? '||' : '>'}</button>
-            <button onClick={goNext} style={{ background: 'transparent', color: '#fff', fontSize: 18, padding: '4px 10px' }}>{'>>'}</button>
-            <div style={{ flex: 1 }} />
-            <div style={{ fontSize: 13, color: '#fff' }}>
-              {cur?.clip?.name || ''} {cur?.totalSets > 1 ? `(${cur.setNum}/${cur.totalSets})` : ''}
+            <div className="pl-seek" onPointerDown={onSeekDown}>
+              <div className="pl-seek-track">
+                <div className="pl-seek-fill" style={{ width: `${duration ? (progress / duration) * 100 : 0}%` }}>
+                  <span className="pl-seek-knob" />
+                </div>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {[0.5, 1, 1.5].map(s => (
-                <button key={s} onClick={() => setSpeed(s)} style={{
-                  padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-                  background: speed === s ? T.accent : 'rgba(255,255,255,.15)',
-                  color: '#fff',
-                }}>{s}x</button>
-              ))}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button className="pl-btn" onClick={goPrev} title="이전 동작">
+                <Icon name="prev" />
+              </button>
+              <button className="pl-btn pl-play" onClick={togglePlay} title={playing ? '일시정지' : '재생'}>
+                <Icon name={playing ? 'pause' : 'play'} size={22} />
+              </button>
+              <button className="pl-btn" onClick={goNext} title="다음 동작">
+                <Icon name="next" />
+              </button>
+
+              <span style={{
+                fontSize: 12, color: 'rgba(255,255,255,.75)', marginLeft: 4,
+                fontVariantNumeric: 'tabular-nums', letterSpacing: .2,
+              }}>{mmss(progress)} / {mmss(duration)}</span>
+
+              <div style={{ flex: 1, minWidth: 12 }} />
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {cur?.clip?.code && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 4,
+                    background: (CAT_MAP[cur.clip.code]?.color || T.dimMid) + '33',
+                    color: CAT_MAP[cur.clip.code]?.color || '#fff', flexShrink: 0,
+                  }}>{cur.clip.code}</span>
+                )}
+                <span style={{
+                  fontSize: 14, fontWeight: 600, color: '#fff', overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{cur?.clip?.name || ''}</span>
+                {cur?.totalSets > 1 && (
+                  <span style={{
+                    fontSize: 12, color: 'rgba(255,255,255,.6)', flexShrink: 0,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>세트 {cur.setNum}/{cur.totalSets}</span>
+                )}
+              </div>
+
+              <div style={{ flex: 1, minWidth: 12 }} />
+
+              <div className="pl-speed">
+                {[0.5, 1, 1.5, 2].map(s => (
+                  <button key={s} onClick={() => setSpeed(s)}
+                    className={speed === s ? 'on' : ''}>{s}x</button>
+                ))}
+              </div>
+
+              <button className="pl-btn" onClick={goFullscreen}
+                title={isFullscreen ? '전체화면 종료' : '전체화면'}>
+                <Icon name={isFullscreen ? 'shrink' : 'expand'} size={18} />
+              </button>
             </div>
-            {!isFullscreen && (
-              <button onClick={goFullscreen} style={{
-                padding: '6px 12px', background: 'rgba(255,255,255,.15)', color: '#fff',
-                borderRadius: 6, fontSize: 12,
-              }}>전체화면</button>
-            )}
           </div>
         )}
       </div>
