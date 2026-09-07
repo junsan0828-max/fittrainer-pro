@@ -14,6 +14,13 @@ let libraryFolder = null;
 // GPU 와 'HEVC 비디오 확장' 이 갖춰진 PC 에서는 H.265 원본이 변환 없이 바로 재생된다.
 app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
 
+// 운동 영상은 소리 트랙이 없어 Chromium 이 'video-only 백그라운드 미디어'로 보고
+// 창이 가려지면 절전을 위해 멋대로 일시정지시킨다. 세션 중에는 그러면 안 된다.
+app.commandLine.appendSwitch('disable-background-media-suspend');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+
 function configPath() { return path.join(app.getPath('userData'), 'ft-config.json'); }
 function loadConfig() {
   try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { return {}; }
@@ -108,6 +115,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: false,
+      backgroundThrottling: false,
     },
   });
 

@@ -1375,6 +1375,7 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
   const [convertSec, setConvertSec] = useState(0);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const playingRef = useRef(false);
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1394,6 +1395,7 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
     setRestCountdown(0);
   }, [blocks]);
 
+  playingRef.current = playing;
   const timing = queueTiming(queue, ci, progress, restCountdown);
 
   // 재생 상태는 App 이 모아서 폰으로 보낸다
@@ -1468,7 +1470,7 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
   function togglePlay() {
     const next = !playing;
     if (videoRef.current) {
-      if (next) videoRef.current.play().catch(() => {});
+      if (next) safePlay();
       else videoRef.current.pause();
     }
     setPlaying(next);
@@ -1569,10 +1571,29 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
 
   useEffect(() => {
     setVideoErr(null);
-    if (cur?.type === 'clip' && videoRef.current && playing) {
-      videoRef.current.play().catch(e => setVideoErr(`재생 실패: ${e?.message || e}`));
-    }
+    if (cur?.type === 'clip' && videoRef.current && playing) safePlay();
   }, [ci, cur?.type, src]);
+
+  // src 교체나 절전으로 재생이 중단되는 건 정상이다. 오류로 띄우지 말고 다시 시도한다.
+  function safePlay(retry = 0) {
+    const el = videoRef.current;
+    if (!el) return;
+    el.play().catch(e => {
+      const benign = e?.name === 'AbortError' || /interrupt|pause/i.test(e?.message || '');
+      if (benign) {
+        if (retry < 3) setTimeout(() => { if (playingRef.current) safePlay(retry + 1); }, 250);
+        return;
+      }
+      setVideoErr(`재생 실패: ${e?.message || e}`);
+    });
+  }
+
+  // 절전으로 멈춘 경우 다시 이어서 재생한다
+  function handleVideoPause() {
+    if (playing && document.visibilityState === 'visible' && !videoRef.current?.ended) {
+      setTimeout(() => { if (playingRef.current) safePlay(); }, 120);
+    }
+  }
 
   // 변환 중에는 ffmpeg 가 처리한 길이를 보여준다
   useEffect(() => {
@@ -1630,7 +1651,7 @@ function PlayerTab({ blocks, playbackMap, onConvertOne, onReport, registerApi })
           <>
             <video ref={videoRef} key={src || ci}
               src={src} onEnded={handleVideoEnded}
-              onError={handleVideoError} onClick={togglePlay}
+              onError={handleVideoError} onClick={togglePlay} onPause={handleVideoPause}
               onTimeUpdate={e => setProgress(e.currentTarget.currentTime)}
               onLoadedMetadata={e => { setDuration(e.currentTarget.duration || 0); setProgress(0); }}
               style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
