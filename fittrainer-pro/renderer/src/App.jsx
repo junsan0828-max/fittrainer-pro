@@ -259,6 +259,7 @@ function TabBar({ tab, setTab }) {
     { id: 'builder', label: '프로그램 빌더' },
     { id: 'queue', label: '연속 재생' },
     { id: 'player', label: '재생' },
+    { id: 'history', label: '기록' },
   ];
   return (
     <div style={{
@@ -370,7 +371,7 @@ function PrefixMapper({ clips, prefixCats, setPrefixCat }) {
 }
 
 // 재생 불가 코덱 안내와 변환 진행 상황
-function CodecBanner({ codec, onConvert }) {
+function CodecBanner({ codec, onConvert, autoConvert, onToggleAutoConvert, onStopConvert }) {
   if (!codec || codec.state === 'idle') return null;
 
   const { state, unsupported, progress } = codec;
@@ -394,12 +395,16 @@ function CodecBanner({ codec, onConvert }) {
     return wrap('rgba(245,158,11,.10)', 'rgba(245,158,11,.35)', (
       <>
         <span style={{ color: '#F59E0B', fontWeight: 600 }}>
-          변환 중 {progress ? `${progress.index + 1}/${progress.total}` : ''} ({pct}%)
+          미리 변환 중 {progress ? `${progress.index + 1}/${progress.total}` : ''} ({pct}%)
         </span>
         <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(245,158,11,.20)' }}>
           <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: '#F59E0B', transition: 'width .3s' }} />
         </div>
-        <span style={{ color: T.dim }}>창을 닫지 마세요</span>
+        <span style={{ color: T.dim }}>그대로 두고 다른 작업을 하셔도 됩니다</span>
+        <button onClick={onStopConvert} style={{
+          padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+          background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+        }}>중지</button>
       </>
     ));
   }
@@ -413,15 +418,25 @@ function CodecBanner({ codec, onConvert }) {
         재생할 수 없는 영상 {unsupported.length}개
       </span>
       {codecs && <span style={{ color: T.dim }}>({codecs} 코덱)</span>}
+      <label style={{
+        marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 11, color: T.dim, cursor: 'pointer',
+      }}>
+        <input type="checkbox" checked={!!autoConvert}
+          onChange={e => onToggleAutoConvert(e.target.checked)}
+          style={{ width: 14, height: 14, padding: 0, accentColor: T.accent }} />
+        자동으로 미리 변환
+      </label>
       <button onClick={onConvert} style={{
-        marginLeft: 'auto', padding: '6px 14px', borderRadius: 6,
+        padding: '6px 14px', borderRadius: 6,
         background: '#F87171', color: '#fff', fontSize: 12, fontWeight: 600,
-      }}>H.264로 변환</button>
+      }}>지금 변환</button>
     </>
   ));
 }
 
-function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert, prefixCats, setPrefixCat }) {
+function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert,
+                     autoConvert, onToggleAutoConvert, onStopConvert, prefixCats, setPrefixCat }) {
   const [filter, setFilter] = useState('');
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -501,7 +516,8 @@ function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone
           </div>
         </div>
 
-        <CodecBanner codec={codec} onConvert={onConvert} />
+        <CodecBanner codec={codec} onConvert={onConvert} autoConvert={autoConvert}
+          onToggleAutoConvert={onToggleAutoConvert} onStopConvert={onStopConvert} />
         <PrefixMapper clips={clips} prefixCats={prefixCats} setPrefixCat={setPrefixCat} />
         <div style={{ padding: '8px 12px', borderBottom: `1px solid ${T.border}` }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
@@ -1402,6 +1418,116 @@ function sessionSeconds(ses) {
   return expandToQueue(ses?.blocks || []).reduce((n, it) => n + itemSeconds(it), 0);
 }
 
+// 세션을 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
+function HistoryTab({ history, setHistory, customers }) {
+  const [who, setWho] = useState('');
+
+  const shown = useMemo(
+    () => (who ? history.filter(h => h.customerName === who) : history)
+      .slice().sort((a, b) => b.startedAt - a.startedAt),
+    [history, who],
+  );
+
+  const stats = useMemo(() => {
+    const done = shown.filter(h => h.doneClips > 0);
+    return {
+      count: done.length,
+      seconds: done.reduce((n, h) => n + (h.seconds || 0), 0),
+      clips: done.reduce((n, h) => n + (h.doneClips || 0), 0),
+    };
+  }, [shown]);
+
+  function clearAll() {
+    if (!confirm('재생 기록을 모두 지울까요?')) return;
+    setHistory([]);
+    saveData('ft_history', []);
+  }
+
+  const fmtDate = ts => {
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  return (
+    <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>재생 기록</span>
+        <select value={who} onChange={e => setWho(e.target.value)} style={{ fontSize: 12, width: 180 }}>
+          <option value="">전체 고객</option>
+          {[...new Set(customers.map(c => c.name).filter(Boolean))].map(n =>
+            <option key={n} value={n}>{n}</option>)}
+        </select>
+        {history.length > 0 && (
+          <button onClick={clearAll} style={{
+            marginLeft: 'auto', padding: '5px 12px', borderRadius: 6, fontSize: 11,
+            background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+          }}>기록 비우기</button>
+        )}
+      </div>
+
+      {shown.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+          {[['진행한 세션', `${stats.count}회`],
+            ['총 운동 시간', humanTime(stats.seconds)],
+            ['수행한 동작', `${stats.clips}개`]].map(([k, v]) => (
+            <div key={k} style={{
+              flex: 1, minWidth: 140, padding: '12px 14px', borderRadius: 8,
+              background: T.panel, border: `1px solid ${T.border}`,
+            }}>
+              <div style={{ fontSize: 11, color: T.dim }}>{k}</div>
+              <div style={{ fontSize: 19, fontWeight: 700, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <div style={{ fontSize: 12, color: T.dim, padding: 30, textAlign: 'center', lineHeight: 1.8 }}>
+          아직 기록이 없습니다.<br />
+          프로그램을 재생하면 자동으로 남습니다.
+        </div>
+      ) : shown.map(h => {
+        const pct = h.totalClips ? Math.round((h.doneClips / h.totalClips) * 100) : 0;
+        const finished = pct >= 100;
+        return (
+          <div key={h.id} style={{
+            padding: '12px 14px', borderRadius: 8, marginBottom: 6,
+            background: T.surface, border: `1px solid ${T.border}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{h.sessionName || '프로그램'}</span>
+              {h.customerName && (
+                <span style={{
+                  fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
+                  background: T.accent + '22', color: T.accent,
+                }}>{h.customerName}</span>
+              )}
+              <span style={{
+                fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
+                background: finished ? 'rgba(34,197,94,.16)' : 'rgba(245,158,11,.16)',
+                color: finished ? '#22C55E' : '#F59E0B',
+              }}>{finished ? '완료' : `중단 ${pct}%`}</span>
+              <span style={{ marginLeft: 'auto', fontSize: 12, color: T.dim, fontVariantNumeric: 'tabular-nums' }}>
+                {fmtDate(h.startedAt)}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: T.dim, marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
+              동작 {h.doneClips}/{h.totalClips} · 운동 시간 {humanTime(h.seconds)}
+            </div>
+            <div style={{ height: 3, borderRadius: 2, background: T.border, marginTop: 8, overflow: 'hidden' }}>
+              <div style={{
+                width: `${pct}%`, height: '100%', borderRadius: 2,
+                background: finished ? '#22C55E' : T.accent,
+              }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab,
                    customer, sessionCfg, onGenerate, onPlaySession }) {
   const [name, setName] = useState('');
@@ -1615,7 +1741,7 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
   );
 }
 
-function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi }) {
+function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi, onProgressLog }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
   const [converting, setConverting] = useState(false);
@@ -1645,6 +1771,31 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
 
   playingRef.current = playing;
   const timing = queueTiming(queue, ci, progress, restCountdown);
+
+  // 재생 기록. 처음 재생을 누르면 시작되고, 진행할수록 갱신된다.
+  useEffect(() => {
+    if (!playing || queue.length === 0) return;
+    onProgressLog?.({
+      sessionName: [...new Set(queue.map(i => i.sessionName).filter(Boolean))].join(' + '),
+      totalClips: queue.filter(i => i.type === 'clip').length,
+      doneClips: queue.slice(0, ci).filter(i => i.type === 'clip').length
+        + (queue[ci]?.type === 'clip' && progress > 0 ? 1 : 0),
+      seconds: timing.elapsed,
+    });
+  }, [playing, ci, queue.length]);
+
+  // 마지막까지 끝나면 완료로 남긴다
+  useEffect(() => {
+    if (queue.length === 0 || ci < queue.length - 1) return;
+    if (queue[ci]?.type !== 'clip' || progress <= 0) return;
+    onProgressLog?.({
+      sessionName: [...new Set(queue.map(i => i.sessionName).filter(Boolean))].join(' + '),
+      totalClips: queue.filter(i => i.type === 'clip').length,
+      doneClips: queue.filter(i => i.type === 'clip').length,
+      seconds: timing.total,
+      finished: true,
+    });
+  }, [ci, queue.length, progress > 0]);
 
   // 재생 상태는 App 이 모아서 폰으로 보낸다
   useEffect(() => {
@@ -2115,6 +2266,9 @@ export default function App() {
   // 저장된 세션과 재생 대기열
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
+  const [history, setHistory] = useState(() => loadLS('ft_history', []));
+  // 지금 진행 중인 기록의 id. 큐가 바뀌면 새 기록을 만든다.
+  const runRef = useRef({ id: null, key: '' });
 
   // 대기열에 담긴 세션들. 재생 탭이 이걸로 큐를 만든다.
   const playlistEntries = useMemo(
@@ -2152,6 +2306,9 @@ export default function App() {
   const [codec, setCodec] = useState({ state: 'idle', unsupported: [], progress: null });
   // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
   const [durations, setDurations] = useState({});
+  // 재생 불가 영상은 앱을 켜둔 동안 알아서 미리 변환해 둔다.
+  // 세션 중에 변환을 기다리는 일이 없어야 한다.
+  const [autoConvert, setAutoConvert] = useState(() => loadLS('ft_auto_convert', true));
   const [sessionCfg, setSessionCfg] = useState({
     duration: 30, intensity: '중강도', focus: '전신',
     condition: '보통', includeCats: [], method: 'auto',
@@ -2327,6 +2484,38 @@ export default function App() {
     return window.electronAPI.onRemote(cmd => appRemoteRef.current?.(cmd));
   }, []);
 
+  // 재생 진행 상황을 기록에 남긴다.
+  // 같은 큐를 재생하는 동안에는 한 건을 계속 갱신하고, 큐가 바뀌면 새로 만든다.
+  function logProgress(p) {
+    if (!p || p.totalClips === 0) return;
+    const key = `${p.sessionName}|${p.totalClips}`;
+    setHistory(prev => {
+      let next;
+      if (runRef.current.key !== key || !runRef.current.id) {
+        runRef.current = { id: uid(), key };
+        next = [...prev, {
+          id: runRef.current.id,
+          sessionName: p.sessionName || '프로그램',
+          customerName: activeCustomer?.name || '',
+          startedAt: Date.now(),
+          totalClips: p.totalClips,
+          doneClips: p.doneClips,
+          seconds: Math.round(p.seconds || 0),
+        }];
+      } else {
+        next = prev.map(h => (h.id === runRef.current.id
+          ? { ...h,
+              doneClips: Math.max(h.doneClips, p.doneClips),
+              seconds: Math.max(h.seconds, Math.round(p.seconds || 0)) }
+          : h));
+      }
+      // 최근 500건만 보관한다
+      if (next.length > 500) next = next.slice(next.length - 500);
+      saveData('ft_history', next);
+      return next;
+    });
+  }
+
   // 컨셉을 누르면 그 자리에서 프로그램을 만들어 목록에 넣는다.
   // 같은 컨셉을 다시 눌러도 클립 풀을 매번 섞으므로 다른 구성이 나온다.
   function generateConcept(code) {
@@ -2412,25 +2601,53 @@ export default function App() {
     return out || null;
   }
 
-  async function convertUnsupported() {
+  const convertingRef = useRef(false);
+
+  async function convertUnsupported(opts = {}) {
     const api = window.electronAPI;
     const paths = codec.unsupported.map(u => u.filePath);
-    if (!api?.convertClips || paths.length === 0) return;
+    if (!api?.convertClips || paths.length === 0 || convertingRef.current) return;
 
+    convertingRef.current = true;
     setCodec(c => ({ ...c, state: 'converting', progress: { index: 0, total: paths.length } }));
     const off = api.onConvertProgress?.(p => setCodec(c => ({ ...c, progress: p })));
     try {
-      const { done, failed } = await api.convertClips(paths);
+      const { done, failed, cancelled } = await api.convertClips(paths);
       setPlaybackMap(prev => ({ ...prev, ...done }));
-      const stillBad = codec.unsupported.filter(u => failed?.[u.filePath]);
-      setCodec({ state: 'done', unsupported: stillBad, progress: null });
-      if (stillBad.length) alert(`${stillBad.length}개 영상은 변환하지 못했습니다.`);
+      const remaining = codec.unsupported.filter(u => !done?.[u.filePath]);
+      setCodec({ state: 'done', unsupported: remaining, progress: null });
+      // 자동 변환은 조용히 끝난다. 직접 누른 경우에만 실패를 알린다.
+      const failedCount = Object.keys(failed || {}).length;
+      if (!opts.silent && !cancelled && failedCount) {
+        alert(`${failedCount}개 영상은 변환하지 못했습니다.`);
+      }
     } catch {
       setCodec(c => ({ ...c, state: 'done', progress: null }));
     } finally {
+      convertingRef.current = false;
       off?.();
     }
   }
+
+  function stopConvert() {
+    window.electronAPI?.cancelConvert?.();
+    setAutoConvert(false);
+    saveLS('ft_auto_convert', false);
+  }
+
+  function toggleAutoConvert(on) {
+    setAutoConvert(on);
+    saveLS('ft_auto_convert', on);
+    if (!on) window.electronAPI?.cancelConvert?.();
+  }
+
+  // 검사가 끝나 재생 불가 영상이 확인되면 백그라운드로 변환을 시작한다
+  useEffect(() => {
+    if (!autoConvert) return;
+    if (codec.state !== 'done' || codec.unsupported.length === 0) return;
+    if (convertingRef.current) return;
+    convertUnsupported({ silent: true });
+  }, [autoConvert, codec.state, codec.unsupported.length]);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -2444,12 +2661,14 @@ export default function App() {
         api.loadData('ft_clip_attrs'),
         api.loadData('ft_sessions'),
         api.loadData('ft_playlist'),
-      ]).then(([cust, blks, attrs, ses, pl]) => {
+        api.loadData('ft_history'),
+      ]).then(([cust, blks, attrs, ses, pl, hist]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
         if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
+        if (hist)  { setHistory(hist);    saveLS('ft_history',    hist); }
       }).catch(() => {});
     }
 
@@ -2478,7 +2697,8 @@ export default function App() {
             }}
             analysisDone={analysisDone} setAnalysisDone={setAnalysisDone}
             clipAttrs={clipAttrs} setClipAttrs={setClipAttrs}
-            codec={codec} onConvert={convertUnsupported}
+            codec={codec} onConvert={() => convertUnsupported()}
+            autoConvert={autoConvert} onToggleAutoConvert={toggleAutoConvert} onStopConvert={stopConvert}
             prefixCats={prefixCats} setPrefixCat={setPrefixCat} />
         )}
         {tab === 'customers' && (
@@ -2500,7 +2720,11 @@ export default function App() {
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
             playbackMap={playbackMap} onConvertOne={convertOne}
-            onReport={setPlayerState} registerApi={registerPlayerApi} />}
+            onReport={setPlayerState} registerApi={registerPlayerApi}
+            onProgressLog={logProgress} />}
+        {tab === 'history' && (
+          <HistoryTab history={history} setHistory={setHistory} customers={customers} />
+        )}
       </div>
     </div>
   );

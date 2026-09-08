@@ -211,6 +211,8 @@ ipcMain.handle('set-remote-pin', (_e, pin) => {
   return setPin(pin);
 });
 
+ipcMain.handle('cancel-convert', () => { transcode.cancelAll(); return true; });
+
 ipcMain.handle('revoke-remote-devices', () => { revokeAll(); return true; });
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize());

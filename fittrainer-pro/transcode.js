@@ -26,6 +26,15 @@ const FFMPEG = resolveBin(() => require('ffmpeg-static'));
 const FFPROBE = resolveBin(() => require('ffprobe-static').path);
 const MISSING = 'ffmpeg 를 찾을 수 없어 변환할 수 없습니다.';
 
+// 백그라운드 변환은 사용자가 언제든 멈출 수 있어야 한다
+let cancelled = false;
+let running = null;   // 지금 돌고 있는 ffmpeg 프로세스
+
+function cancelAll() {
+  cancelled = true;
+  if (running) { try { running.kill('SIGKILL'); } catch {} }
+}
+
 // Chromium 이 재생할 수 있는 코덱
 const OK_VIDEO = ['h264', 'vp8', 'vp9', 'av1', 'theora'];
 const OK_AUDIO = ['aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm_s16le'];
@@ -118,6 +127,7 @@ function convert(filePath, onProgress) {
     ];
 
     const proc = spawn(FFMPEG, args);
+    running = proc;
     let stderr = '';
 
     proc.stdout.on('data', chunk => {
@@ -127,10 +137,12 @@ function convert(filePath, onProgress) {
     proc.stderr.on('data', chunk => { stderr += chunk; });
 
     proc.on('error', err => {
+      running = null;
       fs.rmSync(tmp, { force: true });
       reject(err);
     });
     proc.on('close', code => {
+      running = null;
       if (code === 0 && fs.existsSync(tmp)) {
         fs.renameSync(tmp, out);
         resolve(out);
@@ -144,20 +156,22 @@ function convert(filePath, onProgress) {
 
 // 재생 불가 파일들을 차례로 변환한다. 실패한 파일은 건너뛰고 계속 진행한다.
 async function convertAll(filePaths, onProgress) {
+  cancelled = false;
   const done = {};
   const failed = {};
   for (let i = 0; i < filePaths.length; i++) {
+    if (cancelled) break;
     const fp = filePaths[i];
     onProgress?.({ index: i, total: filePaths.length, filePath: fp, stage: 'start' });
     try {
       done[fp] = await convert(fp, p =>
         onProgress?.({ index: i, total: filePaths.length, filePath: fp, stage: 'progress', ...p }));
     } catch (e) {
-      failed[fp] = e.message;
+      if (!cancelled) failed[fp] = e.message;
     }
     onProgress?.({ index: i, total: filePaths.length, filePath: fp, stage: 'done' });
   }
-  return { done, failed };
+  return { done, failed, cancelled };
 }
 
-module.exports = { probe, probeAll, convert, convertAll, hasConverted, convertedPath };
+module.exports = { probe, probeAll, convert, convertAll, cancelAll, hasConverted, convertedPath };
