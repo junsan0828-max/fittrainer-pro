@@ -1736,8 +1736,9 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
     setPlaying(true);
   }
 
+  // 휴식과 세션 간 휴식 모두 건너뛸 수 있어야 한다
   function skipRest() {
-    if (cur?.type === 'rest') {
+    if (cur?.type === 'rest' || cur?.type === 'break') {
       clearInterval(restTimer.current);
       goNext();
     }
@@ -2156,10 +2157,17 @@ export default function App() {
     condition: '보통', includeCats: [], method: 'auto',
   });
 
+  // 파일 목록이 실제로 바뀌었는지 판단하는 키.
+  // clips 는 map 으로 매번 새 배열이 나오므로 그대로 의존성에 쓰면 검사가 무한 반복된다.
+  const clipPathKey = useMemo(
+    () => rawClips.map(c => c.filePath).filter(Boolean).join('\n'),
+    [rawClips],
+  );
+
   // 라이브러리가 바뀌면 코덱을 검사해 재생 불가 영상을 찾아둔다
   useEffect(() => {
     const api = window.electronAPI;
-    const paths = clips.map(c => c.filePath).filter(Boolean);
+    const paths = clipPathKey ? clipPathKey.split('\n') : [];
     if (!api?.probeClips || paths.length === 0) return;
 
     let cancelled = false;
@@ -2188,7 +2196,7 @@ export default function App() {
       .finally(() => off?.());
 
     return () => { cancelled = true; off?.(); };
-  }, [clips]);
+  }, [clipPathKey]);
 
   // ---------------------------------------------------------------
   // 폰 원격 조작
