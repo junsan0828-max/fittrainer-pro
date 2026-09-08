@@ -1398,9 +1398,93 @@ const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
 const BREAK_PRESETS = [0, 60, 180, 300, 600, 900];
 
+// Date.getDay() 와 같은 순서(일=0). 화면에는 월요일부터 보여준다.
+const DAYS = [
+  { key: 0, label: '일요일', short: '일' },
+  { key: 1, label: '월요일', short: '월' },
+  { key: 2, label: '화요일', short: '화' },
+  { key: 3, label: '수요일', short: '수' },
+  { key: 4, label: '목요일', short: '목' },
+  { key: 5, label: '금요일', short: '금' },
+  { key: 6, label: '토요일', short: '토' },
+];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+function sessionSeconds(ses) {
+  return expandToQueue(ses?.blocks || []).reduce((n, it) => n + itemSeconds(it), 0);
+}
+
+// 요일별 프로그램. 오늘 무엇을 하는지 앱을 켜자마자 알 수 있게 한다.
+function WeekPlanner({ sessions, weekPlan, setWeekPlan, onPlayDay }) {
+  const today = new Date().getDay();
+
+  function assign(dayKey, sessionId) {
+    setWeekPlan(prev => {
+      const next = { ...prev };
+      if (sessionId) next[dayKey] = sessionId; else delete next[dayKey];
+      saveData('ft_week_plan', next);
+      return next;
+    });
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>주간 스케줄</span>
+        <span style={{ fontSize: 12, color: T.dim }}>요일마다 진행할 세션을 정해 둡니다</span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {WEEK_ORDER.map(key => {
+          const day = DAYS.find(d => d.key === key);
+          const ses = sessions.find(x => x.id === weekPlan[key]);
+          const isToday = key === today;
+          return (
+            <div key={key} style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
+              borderRadius: 8, border: `1px solid ${isToday ? T.accent : T.border}`,
+              background: isToday ? 'rgba(124,58,237,.10)' : T.surface,
+            }}>
+              <span style={{
+                minWidth: 74, textAlign: 'center', padding: '7px 0', borderRadius: 6,
+                fontSize: 13, fontWeight: 700,
+                background: isToday ? T.accent : T.panel,
+                color: isToday ? '#fff' : T.text,
+              }}>{day.label}</span>
+
+              {isToday && (
+                <span style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: 1 }}>오늘</span>
+              )}
+
+              <select value={weekPlan[key] || ''} onChange={e => assign(key, e.target.value)}
+                style={{ flex: 1, maxWidth: 320, fontSize: 13 }}>
+                <option value="">— 휴무 —</option>
+                {sessions.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+
+              <span style={{ fontSize: 12, color: T.dim, minWidth: 92 }}>
+                {ses ? `${ses.blocks.length}개 · ${humanTime(sessionSeconds(ses))}` : ''}
+              </span>
+
+              <button disabled={!ses} onClick={() => onPlayDay(key)} style={{
+                padding: '7px 16px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                background: ses ? (isToday ? T.accent : T.accent + '22') : 'transparent',
+                color: ses ? (isToday ? '#fff' : T.accent) : T.dimMid,
+                border: ses ? 'none' : `1px solid ${T.border}`,
+                cursor: ses ? 'pointer' : 'default',
+              }}>재생</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // 저장해 둔 세션들을 순서대로 잇고, 사이 휴식을 정한다.
 // 여기서 짠 대기열이 재생 탭의 큐가 된다.
-function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab }) {
+function QueueTab({ sessions, setSessions, playlist, setPlaylist,
+                   weekPlan, setWeekPlan, onPlayDay, blocks, setTab }) {
   const [name, setName] = useState('');
 
   const entries = useMemo(
@@ -1442,6 +1526,9 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
+      <WeekPlanner sessions={sessions} weekPlan={weekPlan}
+        setWeekPlan={setWeekPlan} onPlayDay={onPlayDay} />
+
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
         {/* 저장된 세션 */}
@@ -2082,6 +2169,7 @@ export default function App() {
   // 저장된 세션과 재생 대기열
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
+  const [weekPlan, setWeekPlan] = useState(() => loadLS('ft_week_plan', {}));
 
   // 대기열에 담긴 세션들. 재생 탭이 이걸로 큐를 만든다.
   const playlistEntries = useMemo(
@@ -2174,10 +2262,15 @@ export default function App() {
       activeCustomerId: activeCustomer?.id || null,
       sessionCfg,
       blocks,
+      weekPlan,
+      today: new Date().getDay(),
+      sessions: sessions.map(x => ({
+        id: x.id, name: x.name, count: x.blocks.length, seconds: sessionSeconds(x),
+      })),
       // 폰에서 동작을 추가할 때 고르는 목록. 재생에 필요없는 필드는 뺀다.
       clips: clips.map(c => ({ id: c.id, code: c.code, name: c.name, part: c.part, reps: c.reps })),
     });
-  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips]);
+  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips, sessions, weekPlan]);
 
   // 여기도 최신 상태를 봐야 하므로 ref 로 유지한다
   const appRemoteRef = useRef(null);
@@ -2263,6 +2356,17 @@ export default function App() {
           saveData('ft_blocks', []);
           break;
 
+        case 'play-day':
+          playDay(cmd.day);
+          break;
+        case 'play-session': {
+          if (!sessions.some(x => x.id === cmd.id)) break;
+          const next = [{ sessionId: cmd.id, breakAfter: 0 }];
+          setPlaylist(next);
+          saveData('ft_playlist', next);
+          setTab('player');
+          break;
+        }
         case 'set-tab':
           if (cmd.tab) setTab(cmd.tab);
           break;
@@ -2275,6 +2379,16 @@ export default function App() {
     if (!window.electronAPI?.onRemote) return;
     return window.electronAPI.onRemote(cmd => appRemoteRef.current?.(cmd));
   }, []);
+
+  // 그 요일에 배정된 세션을 대기열에 올리고 재생 탭으로 보낸다
+  function playDay(dayKey) {
+    const id = weekPlan[dayKey];
+    if (!id) return;
+    const next = [{ sessionId: id, breakAfter: 0 }];
+    setPlaylist(next);
+    saveData('ft_playlist', next);
+    setTab('player');
+  }
 
   // 폰에서 '자동 조합'을 눌렀을 때. 데스크톱 화면의 조합과 같은 규칙을 쓴다.
   function composeToBlocks() {
@@ -2343,12 +2457,14 @@ export default function App() {
         api.loadData('ft_clip_attrs'),
         api.loadData('ft_sessions'),
         api.loadData('ft_playlist'),
-      ]).then(([cust, blks, attrs, ses, pl]) => {
+        api.loadData('ft_week_plan'),
+      ]).then(([cust, blks, attrs, ses, pl, wp]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
         if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
+        if (wp)    { setWeekPlan(wp);     saveLS('ft_week_plan',  wp); }
       }).catch(() => {});
     }
 
@@ -2393,7 +2509,9 @@ export default function App() {
         )}
         {tab === 'queue' && (
           <QueueTab sessions={sessions} setSessions={setSessions}
-            playlist={playlist} setPlaylist={setPlaylist} blocks={blocks} setTab={setTab} />
+            playlist={playlist} setPlaylist={setPlaylist}
+            weekPlan={weekPlan} setWeekPlan={setWeekPlan} onPlayDay={playDay}
+            blocks={blocks} setTab={setTab} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
             playbackMap={playbackMap} onConvertOne={convertOne}
