@@ -231,10 +231,10 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
 
   <!-- 세션 설정 -->
   <div class="screen" id="sc-session" hidden>
-    <div class="sec">오늘의 프로그램</div>
-    <div id="today-card"></div>
-    <div class="sec">주간 스케줄</div>
-    <div id="week-list"></div>
+    <div class="sec">프로그램 만들기</div>
+    <div class="chips" style="padding:0 16px 14px" id="concepts"></div>
+    <div class="sec">만들어진 프로그램</div>
+    <div id="prog-list"></div>
     <div class="sec">대상 고객</div>
     <div class="card" id="sess-cust"><div class="nm"><b>—</b><small>고객 탭에서 선택하세요</small></div></div>
     <div class="field"><label>운동 시간</label><div class="chips" id="sf-dur"></div></div>
@@ -298,8 +298,10 @@ const INTENSITIES = ['저강도','중강도','고강도'];
 const CONDITIONS = ['컨디션 좋음','보통','피로 / 회복 필요'];
 const METHODS = [['auto','자동'],['block','블록형'],['circuit','서킷형'],
   ['interleave','복합교차형'],['superset','슈퍼세트']];
-const DAY_LABEL = ['일요일','월요일','화요일','수요일','목요일','금요일','토요일'];
-const WEEK_ORDER = [1,2,3,4,5,6,0];
+const CONCEPTS = [
+  ['full_strength','전신 근력'], ['cardio_core','유산소 · 코어'], ['lower','하체 집중'],
+  ['circuit_full','전신 순환운동'], ['upper_core','상체 · 코어'], ['recovery','스트레칭 · 회복'],
+];
 
 /* ---------- 로그인 ---------- */
 const KEY = 'ft_remote_token';
@@ -455,7 +457,7 @@ function resetDraft() {
 
 /* ---------- 세션 설정 ---------- */
 function renderSession(s) {
-  renderWeek(s);
+  renderPrograms(s);
   const cfg = s.sessionCfg || {};
   const cust = (s.customers || []).find(c => c.id === s.activeCustomerId);
   $('sess-cust').innerHTML = cust
@@ -472,41 +474,47 @@ function renderSession(s) {
 }
 $('sf-gen').onclick = () => { send('session-generate'); toast('조합 중...'); };
 
-/* ---------- 주간 스케줄 ---------- */
-function renderWeek(s) {
-  const sessions = s.sessions || [];
-  const plan = s.weekPlan || {};
-  const today = s.today ?? new Date().getDay();
-  const byId = id => sessions.find(x => x.id === id);
+/* ---------- 프로그램 만들기 / 목록 ---------- */
+function renderPrograms(s) {
+  $('concepts').innerHTML = CONCEPTS
+    .map(([code, label]) => `<button data-concept="${code}">+ ${label}</button>`).join('');
 
-  const cur = byId(plan[today]);
-  $('today-card').innerHTML = cur
-    ? `<div class="today">
-         <div class="d">${DAY_LABEL[today]}</div>
-         <div class="n">${cur.name}</div>
-         <div class="s">${cur.count}개 동작 · ${human(cur.seconds)}</div>
-         <button data-play-day="${today}">오늘 프로그램 시작</button>
-       </div>`
-    : `<div class="empty">${DAY_LABEL[today]}은 배정된 세션이 없습니다.</div>`;
-
-  $('week-list').innerHTML = WEEK_ORDER.map(k => {
-    const ses = byId(plan[k]);
-    return `<div class="card ${k === today ? 'on' : ''}">
-      <span class="daytag">${DAY_LABEL[k].replace('요일','')}</span>
-      <div class="nm">
-        <b>${ses ? ses.name : '휴무'}</b>
-        ${ses ? `<small>${ses.count}개 동작 · ${human(ses.seconds)}</small>` : ''}
-      </div>
-      ${ses ? `<button class="icon-btn" data-play-day="${k}">▶</button>` : ''}
-    </div>`;
-  }).join('');
+  const list = s.sessions || [];
+  $('prog-list').innerHTML = list.length
+    ? list.map(x => `<div class="card" data-session="${x.id}">
+        <div class="nm"><b>${x.name}</b><small>${x.count}개 동작 · ${human(x.seconds)}</small></div>
+        <button class="icon-btn" data-play-session="${x.id}">▶</button>
+      </div>`).join('')
+    : '<div class="empty">아직 만들어진 프로그램이 없습니다.<br>위에서 컨셉을 눌러 보세요.</div>';
 }
 
 $('sc-session').addEventListener('click', e => {
-  const b = e.target.closest('[data-play-day]');
-  if (!b) return;
-  send('play-day', { day: Number(b.dataset.playDay) });
-  toast('재생을 시작합니다');
+  const gen = e.target.closest('[data-concept]');
+  if (gen) {
+    send('generate-concept', { concept: gen.dataset.concept });
+    toast('프로그램을 만드는 중...');
+    return;
+  }
+  const play = e.target.closest('[data-play-session]');
+  if (play) {
+    send('play-session', { id: play.dataset.playSession });
+    toast('재생을 시작합니다');
+  }
+});
+
+// 카드를 두 번 누르면 재생
+let lastTap = { id: null, at: 0 };
+$('prog-list').addEventListener('click', e => {
+  const card = e.target.closest('[data-session]');
+  if (!card || e.target.closest('[data-play-session]')) return;
+  const id = card.dataset.session, now = Date.now();
+  if (lastTap.id === id && now - lastTap.at < 400) {
+    send('play-session', { id });
+    toast('재생을 시작합니다');
+    lastTap = { id: null, at: 0 };
+  } else {
+    lastTap = { id, at: now };
+  }
 });
 
 /* ---------- 프로그램 빌더 ---------- */

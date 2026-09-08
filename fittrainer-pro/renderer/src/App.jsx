@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { CATS, CAT_MAP, TRAINING_METHODS, composeProgram } from './composeProgram';
+import { CATS, CAT_MAP, TRAINING_METHODS, CONCEPTS, CONCEPT_MAP, composeProgram } from './composeProgram';
 
 const T = {
   bg: '#0A0A0C', surface: '#111114', panel: '#17171B', border: '#222228',
@@ -1398,93 +1398,12 @@ const PLAYABLE_EXT = ['.mp4', '.webm', '.mov', '.m4v'];
 
 const BREAK_PRESETS = [0, 60, 180, 300, 600, 900];
 
-// Date.getDay() 와 같은 순서(일=0). 화면에는 월요일부터 보여준다.
-const DAYS = [
-  { key: 0, label: '일요일', short: '일' },
-  { key: 1, label: '월요일', short: '월' },
-  { key: 2, label: '화요일', short: '화' },
-  { key: 3, label: '수요일', short: '수' },
-  { key: 4, label: '목요일', short: '목' },
-  { key: 5, label: '금요일', short: '금' },
-  { key: 6, label: '토요일', short: '토' },
-];
-const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
-
 function sessionSeconds(ses) {
   return expandToQueue(ses?.blocks || []).reduce((n, it) => n + itemSeconds(it), 0);
 }
 
-// 요일별 프로그램. 오늘 무엇을 하는지 앱을 켜자마자 알 수 있게 한다.
-function WeekPlanner({ sessions, weekPlan, setWeekPlan, onPlayDay }) {
-  const today = new Date().getDay();
-
-  function assign(dayKey, sessionId) {
-    setWeekPlan(prev => {
-      const next = { ...prev };
-      if (sessionId) next[dayKey] = sessionId; else delete next[dayKey];
-      saveData('ft_week_plan', next);
-      return next;
-    });
-  }
-
-  return (
-    <div style={{ marginBottom: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>주간 스케줄</span>
-        <span style={{ fontSize: 12, color: T.dim }}>요일마다 진행할 세션을 정해 둡니다</span>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {WEEK_ORDER.map(key => {
-          const day = DAYS.find(d => d.key === key);
-          const ses = sessions.find(x => x.id === weekPlan[key]);
-          const isToday = key === today;
-          return (
-            <div key={key} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
-              borderRadius: 8, border: `1px solid ${isToday ? T.accent : T.border}`,
-              background: isToday ? 'rgba(124,58,237,.10)' : T.surface,
-            }}>
-              <span style={{
-                minWidth: 74, textAlign: 'center', padding: '7px 0', borderRadius: 6,
-                fontSize: 13, fontWeight: 700,
-                background: isToday ? T.accent : T.panel,
-                color: isToday ? '#fff' : T.text,
-              }}>{day.label}</span>
-
-              {isToday && (
-                <span style={{ fontSize: 10, fontWeight: 700, color: T.accent, letterSpacing: 1 }}>오늘</span>
-              )}
-
-              <select value={weekPlan[key] || ''} onChange={e => assign(key, e.target.value)}
-                style={{ flex: 1, maxWidth: 320, fontSize: 13 }}>
-                <option value="">— 휴무 —</option>
-                {sessions.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-              </select>
-
-              <span style={{ fontSize: 12, color: T.dim, minWidth: 92 }}>
-                {ses ? `${ses.blocks.length}개 · ${humanTime(sessionSeconds(ses))}` : ''}
-              </span>
-
-              <button disabled={!ses} onClick={() => onPlayDay(key)} style={{
-                padding: '7px 16px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                background: ses ? (isToday ? T.accent : T.accent + '22') : 'transparent',
-                color: ses ? (isToday ? '#fff' : T.accent) : T.dimMid,
-                border: ses ? 'none' : `1px solid ${T.border}`,
-                cursor: ses ? 'pointer' : 'default',
-              }}>재생</button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// 저장해 둔 세션들을 순서대로 잇고, 사이 휴식을 정한다.
-// 여기서 짠 대기열이 재생 탭의 큐가 된다.
-function QueueTab({ sessions, setSessions, playlist, setPlaylist,
-                   weekPlan, setWeekPlan, onPlayDay, blocks, setTab }) {
+function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab,
+                   customer, sessionCfg, onGenerate, onPlaySession }) {
   const [name, setName] = useState('');
 
   const entries = useMemo(
@@ -1526,57 +1445,83 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist,
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
-      <WeekPlanner sessions={sessions} weekPlan={weekPlan}
-        setWeekPlan={setWeekPlan} onPlayDay={onPlayDay} />
-
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
-        {/* 저장된 세션 */}
-        <div style={{ flex: 1, minWidth: 320 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>저장된 세션</div>
+        {/* 프로그램 만들기 + 목록 */}
+        <div style={{ flex: 1, minWidth: 340 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>프로그램 만들기</div>
+          <div style={{ fontSize: 12, color: T.dim, marginBottom: 10, lineHeight: 1.6 }}>
+            {customer?.name
+              ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
+              : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
+            <br />컨셉을 누르면 프로그램이 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
+          </div>
 
-          <div style={{
-            display: 'flex', gap: 8, marginBottom: 14, padding: 12,
-            background: T.panel, borderRadius: 8, border: `1px solid ${T.border}`,
-          }}>
-            <input value={name} onChange={e => setName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && saveCurrent()}
-              placeholder="현재 프로그램을 이 이름으로 저장"
-              style={{ flex: 1 }} />
-            <button onClick={saveCurrent} style={{
-              padding: '8px 16px', borderRadius: 6, background: T.accent,
-              color: '#fff', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-            }}>저장</button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
+            {CONCEPTS.map(c => (
+              <button key={c.code} onClick={() => onGenerate(c.code)} style={{
+                padding: '10px 15px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                background: T.accent, color: '#fff',
+              }}>+ {c.label}</button>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>만들어진 프로그램</span>
+            <span style={{ fontSize: 11, color: T.dim }}>더블클릭하면 바로 재생됩니다</span>
           </div>
 
           {sessions.length === 0 ? (
             <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
-              저장된 세션이 없습니다.<br />
-              프로그램 빌더에서 구성한 뒤 위에서 이름을 붙여 저장하세요.
+              아직 만들어진 프로그램이 없습니다.<br />위에서 컨셉을 눌러 보세요.
             </div>
-          ) : sessions.map(ses => (
-            <div key={ses.id} style={{
-              display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-              background: T.surface, border: `1px solid ${T.border}`,
-              borderRadius: 8, marginBottom: 6,
-            }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
-                <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
-                  {ses.blocks.length}개 동작 · 약 {humanTime(
-                    expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0))}
+          ) : sessions.map(ses => {
+            const secs = expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0);
+            return (
+              <div key={ses.id}
+                onDoubleClick={() => onPlaySession(ses.id)}
+                title="더블클릭하면 재생됩니다"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+                  background: T.surface, border: `1px solid ${T.border}`,
+                  borderRadius: 8, marginBottom: 6, cursor: 'pointer', userSelect: 'none',
+                }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
+                  <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
+                    {ses.blocks.length}개 동작 · 약 {humanTime(secs)}
+                  </div>
                 </div>
+                <button onClick={e => { e.stopPropagation(); onPlaySession(ses.id); }} style={{
+                  padding: '6px 14px', borderRadius: 6, background: T.accent,
+                  color: '#fff', fontSize: 12, fontWeight: 600,
+                }}>재생</button>
+                <button onClick={e => { e.stopPropagation(); addToPlaylist(ses.id); }} style={{
+                  padding: '6px 12px', borderRadius: 6, background: T.accent + '22',
+                  color: T.accent, fontSize: 12, fontWeight: 600,
+                }}>대기열</button>
+                <button onClick={e => { e.stopPropagation(); removeSession(ses.id); }} style={{
+                  padding: '6px 10px', borderRadius: 6, background: 'transparent',
+                  color: T.dim, fontSize: 13, border: `1px solid ${T.border}`,
+                }}>✕</button>
               </div>
-              <button onClick={() => addToPlaylist(ses.id)} style={{
-                padding: '6px 12px', borderRadius: 6, background: T.accent + '22',
-                color: T.accent, fontSize: 12, fontWeight: 600,
-              }}>대기열 추가</button>
-              <button onClick={() => removeSession(ses.id)} style={{
-                padding: '6px 10px', borderRadius: 6, background: 'transparent',
-                color: T.dim, fontSize: 13, border: `1px solid ${T.border}`,
-              }}>✕</button>
+            );
+          })}
+
+          {blocks.length > 0 && (
+            <div style={{
+              display: 'flex', gap: 8, marginTop: 14, paddingTop: 14,
+              borderTop: `1px solid ${T.border}`,
+            }}>
+              <input value={name} onChange={e => setName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && saveCurrent()}
+                placeholder="빌더의 현재 구성을 이 이름으로 저장" style={{ flex: 1, fontSize: 12 }} />
+              <button onClick={saveCurrent} style={{
+                padding: '8px 14px', borderRadius: 6, background: T.panel, color: T.text,
+                fontSize: 12, border: `1px solid ${T.border}`, whiteSpace: 'nowrap',
+              }}>저장</button>
             </div>
-          ))}
+          )}
         </div>
 
         {/* 재생 대기열 */}
@@ -2169,7 +2114,6 @@ export default function App() {
   // 저장된 세션과 재생 대기열
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
-  const [weekPlan, setWeekPlan] = useState(() => loadLS('ft_week_plan', {}));
 
   // 대기열에 담긴 세션들. 재생 탭이 이걸로 큐를 만든다.
   const playlistEntries = useMemo(
@@ -2262,15 +2206,13 @@ export default function App() {
       activeCustomerId: activeCustomer?.id || null,
       sessionCfg,
       blocks,
-      weekPlan,
-      today: new Date().getDay(),
       sessions: sessions.map(x => ({
         id: x.id, name: x.name, count: x.blocks.length, seconds: sessionSeconds(x),
       })),
       // 폰에서 동작을 추가할 때 고르는 목록. 재생에 필요없는 필드는 뺀다.
       clips: clips.map(c => ({ id: c.id, code: c.code, name: c.name, part: c.part, reps: c.reps })),
     });
-  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips, sessions, weekPlan]);
+  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips, sessions]);
 
   // 여기도 최신 상태를 봐야 하므로 ref 로 유지한다
   const appRemoteRef = useRef(null);
@@ -2356,15 +2298,12 @@ export default function App() {
           saveData('ft_blocks', []);
           break;
 
-        case 'play-day':
-          playDay(cmd.day);
+        case 'play-session':
+          playSession(cmd.id);
           break;
-        case 'play-session': {
-          if (!sessions.some(x => x.id === cmd.id)) break;
-          const next = [{ sessionId: cmd.id, breakAfter: 0 }];
-          setPlaylist(next);
-          saveData('ft_playlist', next);
-          setTab('player');
+        case 'generate-concept': {
+          const ses = generateConcept(cmd.concept);
+          if (ses && cmd.play) playSession(ses.id);
           break;
         }
         case 'set-tab':
@@ -2380,10 +2319,50 @@ export default function App() {
     return window.electronAPI.onRemote(cmd => appRemoteRef.current?.(cmd));
   }, []);
 
-  // 그 요일에 배정된 세션을 대기열에 올리고 재생 탭으로 보낸다
-  function playDay(dayKey) {
-    const id = weekPlan[dayKey];
-    if (!id) return;
+  // 컨셉을 누르면 그 자리에서 프로그램을 만들어 목록에 넣는다.
+  // 같은 컨셉을 다시 눌러도 클립 풀을 매번 섞으므로 다른 구성이 나온다.
+  function generateConcept(code) {
+    const con = CONCEPT_MAP[code];
+    if (!con) return null;
+    if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return null; }
+
+    const cfg = { ...sessionCfg, includeCats: con.cats, focus: con.focus, method: con.method };
+    const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
+    const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfg });
+
+    if (r.warmupClips.length + r.mainClips.length + r.coolClips.length === 0) {
+      alert(explainEmptyPool(enriched, cfg));
+      return null;
+    }
+
+    const mk = (list, phase) => list.map(clip => ({
+      uid: uid(), clip, phase,
+      sets: phase === 'main' ? r.mainSets : 1,
+      restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
+      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : r.restAfter,
+    }));
+    const newBlocks = [
+      ...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown'),
+    ];
+
+    // 같은 컨셉이 여러 개면 뒤에 번호를 붙인다
+    const base = activeCustomer?.name ? `${activeCustomer.name} · ${con.label}` : con.label;
+    const same = sessions.filter(x => x.name === base || x.name.startsWith(base + ' ')).length;
+    const ses = {
+      id: uid(),
+      name: same === 0 ? base : `${base} ${same + 1}`,
+      concept: con.code,
+      customerName: activeCustomer?.name || '',
+      blocks: newBlocks,
+      savedAt: Date.now(),
+    };
+    setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
+    return ses;
+  }
+
+  // 만들어진 프로그램을 바로 재생한다
+  function playSession(id) {
+    if (!sessions.some(x => x.id === id)) return;
     const next = [{ sessionId: id, breakAfter: 0 }];
     setPlaylist(next);
     saveData('ft_playlist', next);
@@ -2457,14 +2436,12 @@ export default function App() {
         api.loadData('ft_clip_attrs'),
         api.loadData('ft_sessions'),
         api.loadData('ft_playlist'),
-        api.loadData('ft_week_plan'),
-      ]).then(([cust, blks, attrs, ses, pl, wp]) => {
+      ]).then(([cust, blks, attrs, ses, pl]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
         if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
-        if (wp)    { setWeekPlan(wp);     saveLS('ft_week_plan',  wp); }
       }).catch(() => {});
     }
 
@@ -2509,9 +2486,9 @@ export default function App() {
         )}
         {tab === 'queue' && (
           <QueueTab sessions={sessions} setSessions={setSessions}
-            playlist={playlist} setPlaylist={setPlaylist}
-            weekPlan={weekPlan} setWeekPlan={setWeekPlan} onPlayDay={playDay}
-            blocks={blocks} setTab={setTab} />
+            playlist={playlist} setPlaylist={setPlaylist} blocks={blocks} setTab={setTab}
+            customer={activeCustomer} sessionCfg={sessionCfg}
+            onGenerate={generateConcept} onPlaySession={playSession} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
             playbackMap={playbackMap} onConvertOne={convertOne}

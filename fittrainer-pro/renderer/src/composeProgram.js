@@ -32,6 +32,44 @@ export const TRAINING_METHODS = [
   { code: 'superset', label: '슈퍼세트 — 부위 다른 근력 클립 페어 연속' },
 ];
 
+// 프로그램 컨셉. 고르면 카테고리·집중 부위·구성 기법이 한 번에 잡힌다.
+// 준비/정리운동 재료(CFR·CFS·MOV·STT)는 어느 컨셉에나 들어가야 구성이 완성된다.
+export const CONCEPTS = [
+  { code: 'full_strength', label: '전신 근력',
+    cats: ['STR', 'MOV', 'CCS', 'CCB', 'CFR', 'CFS', 'STT'], focus: '전신', method: 'block' },
+  { code: 'cardio_core', label: '유산소 · 코어',
+    cats: ['CAR', 'CCB', 'CCS', 'MOV', 'CFR', 'CFS', 'STT'], focus: '코어', method: 'circuit' },
+  { code: 'lower', label: '하체 집중',
+    cats: ['STR', 'MOV', 'CCB', 'CFR', 'CFS', 'STT'], focus: '하체', method: 'block' },
+  { code: 'circuit_full', label: '전신 순환운동',
+    cats: ['STR', 'CAR', 'CCS', 'CCB', 'MOV', 'CFR', 'CFS', 'STT'], focus: '전신', method: 'interleave' },
+  { code: 'upper_core', label: '상체 · 코어',
+    cats: ['STR', 'CCS', 'CCB', 'MOV', 'CFR', 'CFS', 'STT'], focus: '상체', method: 'superset' },
+  { code: 'recovery', label: '스트레칭 · 회복',
+    cats: ['STT', 'CFR', 'CFS', 'MOV'], focus: '전신', method: 'block' },
+];
+export const CONCEPT_MAP = Object.fromEntries(CONCEPTS.map(c => [c.code, c]));
+
+// 영상 길이를 아직 못 읽은 클립의 대체값(초).
+// 라이브러리를 한 번 훑고 나면 실제 길이가 들어와 정확해진다.
+const FALLBACK_CLIP_SEC = 40;
+
+const clipSec = c => (c?.duration > 0 ? c.duration : FALLBACK_CLIP_SEC);
+
+// 블록 하나가 실제로 잡아먹는 시간. 재생 큐를 만드는 규칙과 같아야 한다.
+export function blockSeconds(clip, phase, mainSets, restBetweenSets, restAfter) {
+  const sets = phase === 'main' ? mainSets : 1;
+  const between = phase === 'main' ? restBetweenSets : 10;
+  const after = phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : restAfter;
+  return clipSec(clip) * sets + between * (sets - 1) + after;
+}
+
+function planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter) {
+  const sum = (list, phase) => list.reduce(
+    (n, c) => n + blockSeconds(c, phase, mainSets, restBetweenSets, restAfter), 0);
+  return sum(warmupClips, 'warmup') + sum(mainClips, 'main') + sum(coolClips, 'cooldown');
+}
+
 export function pickMethod(customer, sessionCfg) {
   const explicit = sessionCfg?.method;
   if (explicit && explicit !== 'auto') return explicit;
@@ -132,7 +170,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
         '중강도': { sets: 3, rest: 20, restAfter: 60, rpe: 13 },
         '고강도': { sets: 4, rest: 20, restAfter: 45, rpe: 15 } }[intensity]
       || { sets: 3, rest: 20, restAfter: 60, rpe: 13 };
-  const mainSets = Math.max(1, Math.round(intSettings.sets * condMod));
+  let mainSets = Math.max(1, Math.round(intSettings.sets * condMod));
 
   // 살아있는(아직 소비 안 된) 카테고리별 큐 — method별 조합 함수가 여기서 뽑아 쓴다.
   const queues = {
@@ -230,9 +268,52 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     ...takeAndRemove(queues.warm, Math.ceil(coolCount * 0.4)),
   ].slice(0, coolCount);
 
+  // ---- 목표 시간에 맞춘다 ----
+  // 개수만 맞추면 영상 길이가 제각각이라 실제 소요 시간이 크게 어긋난다.
+  // 남은 클립을 더 넣거나 덜어내서 목표 구간 안으로 들여놓는다.
+  const targetSec = dur * 60;
+  const maxSec = targetSec + 5 * 60;   // 45분 목표면 45~50분
+  const restBetweenSets = intSettings.rest;
+  const restAfter = intSettings.restAfter;
+  const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter);
+
+  // 모자라면 남은 풀에서 본운동을 더 채운다
+  const fillOrder = [queues.str, queues.core, queues.car, queues.warm, queues.cool];
+  let guard = 0;
+  while (now() < targetSec && guard++ < 200) {
+    const src = fillOrder.find(q => q.length > 0);
+    if (!src) break;
+    const next = src.shift();
+    if (now() + blockSeconds(next, 'main', mainSets, restBetweenSets, restAfter) > maxSec) {
+      // 이걸 넣으면 넘친다. 다른 짧은 클립이 있으면 계속, 없으면 멈춘다.
+      const shorter = fillOrder.find(q =>
+        q.some(c => now() + blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter) <= maxSec));
+      if (!shorter) break;
+      const idx = shorter.findIndex(c =>
+        now() + blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter) <= maxSec);
+      mainClips.push(...shorter.splice(idx, 1));
+      continue;
+    }
+    mainClips.push(next);
+  }
+
+  // 넘치면 본운동 뒤쪽부터 덜어낸다. 준비/정리운동은 건드리지 않는다.
+  while (now() > maxSec && mainClips.length > 1) mainClips.pop();
+
+  // 클립이 부족해 목표에 한참 못 미치면 세트를 늘려 채운다
+  while (now() < targetSec && mainSets < 6) {
+    const bumped = planSeconds(warmupClips, mainClips, coolClips, mainSets + 1, restBetweenSets, restAfter);
+    if (bumped > maxSec) break;
+    mainSets += 1;
+  }
+
   mainClips = avoidConsecutiveSamePart(mainClips);
 
-  const rationale = buildRationale({ method, customer, sessionCfg, targetCount, mainSets, intensity: intSettings });
+  const estimatedSeconds = now();
+  const rationale = buildRationale({
+    method, customer, sessionCfg, targetCount: mainClips.length, mainSets,
+    intensity: intSettings, estimatedSeconds,
+  });
 
   return {
     method,
@@ -240,13 +321,14 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     mainClips,
     coolClips,
     mainSets,
-    restBetweenSets: intSettings.rest,
-    restAfter: intSettings.restAfter,
+    restBetweenSets,
+    restAfter,
+    estimatedSeconds,
     rationale,
   };
 }
 
-function buildRationale({ method, customer, sessionCfg, targetCount, mainSets, intensity }) {
+function buildRationale({ method, customer, sessionCfg, targetCount, mainSets, intensity, estimatedSeconds }) {
   const name = customer?.name || '회원';
   const level = customer?.experience || '정보 없음';
   const goal = customer?.goal || '정보 없음';
@@ -259,5 +341,8 @@ function buildRationale({ method, customer, sessionCfg, targetCount, mainSets, i
     superset: `${name}님 레벨에서는 서로 다른 부위 근력 클립을 페어로 묶어 휴식 없이 연속 수행시켜 세션 밀도를 높였습니다. 페어 사이에만 휴식을 둬 전체 시간 대비 실제 운동시간 비율(운동 밀도)을 극대화합니다.`,
   }[method] || '';
 
-  return `[${methodLabel}] ${why} 총 ${targetCount}개 블록(본운동 세트 ${mainSets}회, RPE ${intensity.rpe}), 목표: ${goal}, 경력: ${level}. 카테고리 풀을 매 실행마다 셔플하므로 같은 조건으로 다시 생성해도 클립 조합은 달라집니다.`;
+  const mins = Math.round((estimatedSeconds || 0) / 60);
+  return `[${methodLabel}] ${why} 본운동 ${targetCount}개 동작(세트 ${mainSets}회, RPE ${intensity.rpe}), `
+    + `예상 소요 약 ${mins}분, 목표: ${goal}, 경력: ${level}. `
+    + `카테고리 풀을 매 실행마다 셔플하므로 같은 조건으로 다시 생성해도 클립 조합은 달라집니다.`;
 }
