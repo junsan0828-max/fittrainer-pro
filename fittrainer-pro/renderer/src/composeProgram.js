@@ -274,7 +274,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const targetSec = dur * 60;
   const maxSec = targetSec + 5 * 60;   // 45분 목표면 45~50분
   const restBetweenSets = intSettings.rest;
-  const restAfter = intSettings.restAfter;
+  let restAfter = intSettings.restAfter;
   const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter);
 
   // 모자라면 남은 풀에서 본운동을 더 채운다
@@ -305,6 +305,14 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     const bumped = planSeconds(warmupClips, mainClips, coolClips, mainSets + 1, restBetweenSets, restAfter);
     if (bumped > maxSec) break;
     mainSets += 1;
+  }
+
+  // 영상이 길면 하나를 더 넣는 순간 넘쳐서, 목표에 조금 못 미친 채 끝나곤 한다.
+  // 남은 만큼 동작 사이 휴식을 늘려 목표 시간을 채운다. 최소 시간은 지켜야 한다.
+  if (now() < targetSec && mainClips.length > 0) {
+    const gap = targetSec - now();
+    const add = Math.ceil(gap / mainClips.length);
+    restAfter = Math.min(restAfter + add, 180);
   }
 
   mainClips = avoidConsecutiveSamePart(mainClips);
