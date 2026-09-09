@@ -116,9 +116,14 @@ io.use((socket, next) => {
   next(new Error('unauthorized'));
 });
 
-// Serve local video files with range request support
+// 로컬 영상 전송. 범위 요청을 지원한다.
+// 앱 자체는 file:// 로 재생하므로 이 통로는 원격에서만 쓴다.
+// 인증 없이 열어두면 같은 네트워크의 아무 기기나 영상을 가져갈 수 있어 토큰을 받는다.
 app.get('/localvideo', (req, res) => {
   try {
+    const token = req.headers['x-remote-token'] || req.query.token;
+    if (!validToken(token)) return res.status(401).send('Unauthorized');
+
     const filePath = path.resolve(decodeURIComponent(req.query.path || ''));
     const VALID_EXTENSIONS = ['.mp4', '.mov', '.avi', '.mkv', '.webm'];
     if (!filePath || !VALID_EXTENSIONS.includes(path.extname(filePath).toLowerCase())) {

@@ -267,7 +267,7 @@ function TitleBar() {
   );
 }
 
-function TabBar({ tab, setTab }) {
+function TabBar({ tab, setTab, alert }) {
   const tabs = [
     { id: 'library', label: '라이브러리' },
     { id: 'customers', label: '고객' },
@@ -290,7 +290,16 @@ function TabBar({ tab, setTab }) {
           background: 'transparent',
           borderBottom: tab === t.id ? `2px solid ${T.accent}` : '2px solid transparent',
           transition: 'all .15s',
-        }}>{t.label}</button>
+          position: 'relative',
+        }}>
+          {t.label}
+          {t.id === 'settings' && alert > 0 && (
+            <span title={`확인이 필요한 항목 ${alert}개`} style={{
+              position: 'absolute', top: 6, right: 6, width: 7, height: 7,
+              borderRadius: 4, background: '#F87171',
+            }} />
+          )}
+        </button>
       ))}
     </div>
   );
@@ -1479,7 +1488,7 @@ function Toggle({ on, onChange }) {
 function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
                        codec, onConvert, clips, prefixCats, setPrefixCat,
                        libraryFolder, onSelectFolder, onRescan,
-                       history, setHistory, sessions }) {
+                       history, setHistory, sessions, missing, onRemoveMissing }) {
   const unconverted = codec?.unsupported?.length || 0;
   const converting = codec?.state === 'converting';
 
@@ -1503,6 +1512,48 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
           </span>
         </Row>
       </SetGroup>
+
+      {missing.length > 0 && (
+        <SetGroup title="확인이 필요합니다">
+          <div style={{ padding: '14px 16px' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>
+              프로그램에 들어 있는 영상 {missing.length}개를 폴더에서 찾을 수 없습니다
+            </div>
+            <div style={{ fontSize: 12, color: T.dim, marginTop: 5, lineHeight: 1.6 }}>
+              파일을 지웠거나 다른 곳으로 옮긴 것 같습니다. 그대로 두면 재생 중에 멈춥니다.
+              원본을 되돌려 놓고 <b style={{ color: T.text }}>다시 읽기</b> 를 누르거나,
+              아래에서 프로그램에서 걷어내세요.
+            </div>
+
+            <div style={{ marginTop: 10, maxHeight: 190, overflowY: 'auto' }}>
+              {missing.map(m => (
+                <div key={m.filePath} style={{
+                  padding: '8px 10px', borderRadius: 6, marginBottom: 4,
+                  background: 'rgba(248,113,113,.08)',
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    {m.clip?.name || m.clip?.fileName || '이름 없음'}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.dim, marginTop: 3, wordBreak: 'break-all' }}>
+                    {m.filePath}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#F59E0B', marginTop: 3 }}>
+                    쓰이는 곳: {m.places.join(', ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => {
+              if (!confirm(`영상 ${missing.length}개를 프로그램에서 걷어낼까요?\n원본 파일은 건드리지 않습니다.`)) return;
+              onRemoveMissing();
+            }} style={{
+              marginTop: 10, padding: '8px 16px', borderRadius: 6, fontSize: 12,
+              fontWeight: 600, background: '#F87171', color: '#fff',
+            }}>프로그램에서 걷어내기</button>
+          </div>
+        </SetGroup>
+      )}
 
       <SetGroup title="영상 분류">
         <div style={{ padding: 4 }}>
@@ -1691,7 +1742,7 @@ function HistoryTab({ history, setHistory, customers }) {
 }
 
 function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab,
-                   customer, sessionCfg, onGenerate, onPlaySession }) {
+                   customer, sessionCfg, onGenerate, onPlaySession, missingPaths }) {
   const [name, setName] = useState('');
 
   const entries = useMemo(
@@ -1765,6 +1816,7 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
             </div>
           ) : sessions.map(ses => {
             const secs = expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0);
+            const broken = ses.blocks.filter(b => missingPaths?.has(b.clip?.filePath)).length;
             return (
               <div key={ses.id}
                 onDoubleClick={() => onPlaySession(ses.id)}
@@ -1778,6 +1830,11 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
                   <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
                   <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
                     {ses.blocks.length}개 동작 · 약 {humanTime(secs)}
+                    {broken > 0 && (
+                      <span style={{ color: '#F87171', marginLeft: 6 }}>
+                        · 영상 {broken}개 없음
+                      </span>
+                    )}
                   </div>
                 </div>
                 <button onClick={e => { e.stopPropagation(); onPlaySession(ses.id); }} style={{
@@ -2752,6 +2809,51 @@ export default function App() {
     saveData('ft_clips', result.clips);
   }
 
+  // 프로그램이 참조하는 영상 중 폴더에서 사라진 것을 찾는다.
+  // 재생 도중에야 오류로 알게 되는 일이 없도록 미리 알려준다.
+  const missing = useMemo(() => {
+    if (clips.length === 0) return [];   // 아직 안 읽었으면 판단할 수 없다
+    const have = new Set(clips.map(c => c.filePath).filter(Boolean));
+    const found = new Map();             // filePath -> { clip, 쓰이는 곳 }
+
+    const scan = (blockList, where) => {
+      for (const b of blockList || []) {
+        const fp = b.clip?.filePath;
+        if (!fp || have.has(fp)) continue;
+        const e = found.get(fp) || { clip: b.clip, places: new Set() };
+        e.places.add(where);
+        found.set(fp, e);
+      }
+    };
+    scan(blocks, '프로그램 빌더');
+    for (const ses of sessions) scan(ses.blocks, ses.name);
+
+    return [...found.entries()].map(([filePath, v]) =>
+      ({ filePath, clip: v.clip, places: [...v.places] }));
+  }, [clips, blocks, sessions]);
+
+  const missingPathSet = useMemo(() => new Set(missing.map(m => m.filePath)), [missing]);
+
+  // 사라진 영상을 프로그램에서 걷어낸다
+  function removeMissing() {
+    const gone = new Set(missing.map(m => m.filePath));
+    const clean = list => (list || []).filter(b => !gone.has(b.clip?.filePath));
+
+    const nextBlocks = clean(blocks);
+    setBlocks(nextBlocks);
+    saveData('ft_blocks', nextBlocks);
+
+    const nextSessions = sessions.map(s => ({ ...s, blocks: clean(s.blocks) }))
+      .filter(s => s.blocks.length > 0);
+    setSessions(nextSessions);
+    saveData('ft_sessions', nextSessions);
+
+    const keep = new Set(nextSessions.map(s => s.id));
+    const nextPlaylist = playlist.filter(p => keep.has(p.sessionId));
+    setPlaylist(nextPlaylist);
+    saveData('ft_playlist', nextPlaylist);
+  }
+
   // 재생 진행 상황을 기록에 남긴다.
   // 같은 큐를 재생하는 동안에는 한 건을 계속 갱신하고, 큐가 바뀌면 새로 만든다.
   function logProgress(p) {
@@ -2958,7 +3060,7 @@ export default function App() {
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: T.bg }}>
       <style>{css}</style>
       <TitleBar />
-      <TabBar tab={tab} setTab={setTab} />
+      <TabBar tab={tab} setTab={setTab} alert={missing.length} />
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {tab === 'library' && (
           <LibraryTab clips={clips} setClips={setClips}
@@ -2988,7 +3090,8 @@ export default function App() {
           <QueueTab sessions={sessions} setSessions={setSessions}
             playlist={playlist} setPlaylist={setPlaylist} blocks={blocks} setTab={setTab}
             customer={activeCustomer} sessionCfg={sessionCfg}
-            onGenerate={generateConcept} onPlaySession={playSession} />
+            onGenerate={generateConcept} onPlaySession={playSession}
+            missingPaths={missingPathSet} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
             playbackMap={playbackMap} onConvertOne={convertOne}
@@ -3000,7 +3103,8 @@ export default function App() {
             codec={codec} onConvert={() => convertUnsupported()}
             clips={clips} prefixCats={prefixCats} setPrefixCat={setPrefixCat}
             libraryFolder={libraryFolder} onSelectFolder={selectFolder} onRescan={rescanFolder}
-            history={history} setHistory={setHistory} sessions={sessions} />
+            history={history} setHistory={setHistory} sessions={sessions}
+            missing={missing} onRemoveMissing={removeMissing} />
         )}
         {tab === 'history' && (
           <HistoryTab history={history} setHistory={setHistory} customers={customers} />
