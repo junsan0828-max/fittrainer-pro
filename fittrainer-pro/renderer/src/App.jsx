@@ -920,8 +920,6 @@ function RemotePanel({ embedded }) {
 }
 
 function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blocks, setBlocks, setTab }) {
-  const [generating, setGenerating] = useState(false);
-  const [aiError, setAiError] = useState('');
   const [lastMethod, setLastMethod] = useState('');
   const [lastRationale, setLastRationale] = useState('');
 
@@ -972,100 +970,6 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
     setTab('builder');
   }
 
-  async function generateAI() {
-    setGenerating(true); setAiError('');
-    try {
-      const enriched = getEnrichedClips();
-      const available = enriched.filter(c => {
-        if (sessionCfg.includeCats?.length > 0 && !sessionCfg.includeCats.includes(c.code)) return false;
-        if (customer?.injuries?.length > 0 && c.injuryRisk?.length > 0) {
-          if (c.injuryRisk.some(r => customer.injuries.includes(r))) return false;
-        }
-        return true;
-      });
-
-      const levelMap = { '초급 (6개월 미만)': '초급', '중급 (6개월~2년)': '중급', '고급 (2년 이상)': '고급' };
-      const custLevel = levelMap[customer?.experience] || '';
-      if (custLevel) {
-        available.sort((a, b) => (a.level === custLevel ? -1 : 1) - (b.level === custLevel ? -1 : 1));
-      }
-
-      const libSummary = {};
-      available.forEach(c => {
-        if (!libSummary[c.code]) libSummary[c.code] = [];
-        libSummary[c.code].push(`${c.fileName}(${c.name},부위:${c.part||'-'},난이도:${c.level||'-'},패턴:${c.pattern||'-'})`);
-      });
-
-      const systemPrompt = `당신은 FMS 기반 체형교정, 기능분석, 균형트레이닝 전문가입니다.
-동작 배치 순서는 하나의 정답이 아니라 아래 훈련 기법 중 회원 레벨·강도·목표에 맞는 것을 선택하거나 섞어서 설계하세요:
-- 블록형: 폼롤링→모빌리티→안정화→움직임패턴→강화→쿨다운 순차 (초급/부상 이력 있는 회원에게 안전)
-- 서킷형: 근력·코어·유산소를 라운드 단위로 반복 (다이어트/체력증진 목표)
-- 복합교차형: 유산소·폼롤링·스트레칭 같은 회복 계열을 준비/정리운동에만 두지 않고 근력·코어 사이사이 전 구간에 섞어 배치 (예: 유산소→폼롤링→근력→유산소→스트레칭→코어→...). 경력자·고강도를 원하는 회원에게 단조로움을 없애고 전환 자체를 자극으로 만듭니다.
-- 슈퍼세트: 서로 다른 부위 근력 동작을 페어로 묶어 휴식 없이 연속 배치, 페어 사이에만 휴식 (중급 이상, 세션 밀도를 높이고 싶을 때)
-단순함과 복합성 자체보다 회원 상황에 맞는 판단이 중요합니다 — 무조건 복잡하게 짤 필요는 없습니다.
-부상 부위 동작 제외, 난이도 매칭, 신체 부위 균형을 고려하세요.
-연속 2회 이상 같은 bodyParts가 나오지 않게 배치하세요.
-JSON만 응답하세요:
-{"name":"프로그램명","method":"선택한 기법(블록형/서킷형/복합교차형/슈퍼세트 등)","rationale":"이 회원에게 이 기법을 고른 이유(레벨·강도·목표와 연결지어 설명)","blocks":[{"fileName":"원본파일명.mp4","sets":2,"restBetweenSets":20,"restAfter":60}]}`;
-
-      const userPrompt = `고객: ${JSON.stringify({
-        name: customer?.name, age: customer?.age, goal: customer?.goal,
-        injuries: customer?.injuries, experience: customer?.experience,
-      })}
-세션 조건: ${JSON.stringify(sessionCfg)}
-라이브러리:
-${Object.entries(libSummary).map(([k,v]) => `[${k}] ${v.join(', ')}`).join('\n')}`;
-
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': localStorage.getItem('ft_api_key') || '',
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 4096,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        }),
-      });
-
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error(`API 오류 (${resp.status}): ${err}`);
-      }
-
-      const data = await resp.json();
-      const text = data.content?.[0]?.text || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('AI 응답에서 JSON을 찾을 수 없습니다');
-      const program = JSON.parse(jsonMatch[0]);
-
-      const newBlocks = (program.blocks || []).map(b => {
-        const clip = enriched.find(c => c.fileName === b.fileName);
-        if (!clip) return null;
-        return {
-          uid: uid(),
-          clip,
-          sets: b.sets || 1,
-          restBetweenSets: b.restBetweenSets || 20,
-          restAfter: b.restAfter || 60,
-        };
-      }).filter(Boolean);
-
-      setBlocks(newBlocks);
-      saveData('ft_blocks', newBlocks);
-      setLastMethod('AI');
-      setLastRationale(program.rationale || '');
-      setTab('builder');
-    } catch (e) {
-      setAiError(e.message);
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   return (
     <div style={{ padding: 24, maxWidth: 700, margin: '0 auto', overflowY: 'auto', height: '100%' }}>
@@ -1126,20 +1030,14 @@ ${Object.entries(libSummary).map(([k,v]) => `[${k}] ${v.join(', ')}`).join('\n')
       )}
 
       <div style={{ marginTop: 8, marginBottom: 12, fontSize: 12, color: T.dim }}>
-        API Key 와 원격 조작 설정은 <b style={{ color: T.text }}>설정</b> 탭으로 옮겼습니다.
+        원격 조작 설정은 <b style={{ color: T.text }}>설정</b> 탭에 있습니다.
       </div>
 
-      {aiError && <div style={{ color: '#E84040', fontSize: 12, marginBottom: 8, padding: 8, background: '#E8404011', borderRadius: 6 }}>{aiError}</div>}
-
       <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-        <button onClick={generateAI} disabled={generating} style={{
-          flex: 1, minWidth: 160, padding: '12px 20px', background: T.accent, color: '#fff',
-          borderRadius: 8, fontSize: 14, fontWeight: 600, opacity: generating ? 0.6 : 1,
-        }}>{generating ? 'AI 프로그램 생성 중...' : 'AI 프로그램 생성'}</button>
         <button onClick={generateRuleBased} style={{
-          flex: 1, minWidth: 160, padding: '12px 20px', background: '#1D4ED8', color: '#fff',
+          flex: 1, minWidth: 160, padding: '12px 20px', background: T.accent, color: '#fff',
           borderRadius: 8, fontSize: 14, fontWeight: 600,
-        }}>자동 조합 (API 불필요)</button>
+        }}>자동 조합</button>
         <button onClick={() => setTab('builder')} style={{
           flex: 1, minWidth: 120, padding: '12px 20px', background: T.panel, color: T.text,
           borderRadius: 8, fontSize: 14, border: `1px solid ${T.border}`,
@@ -1598,16 +1496,6 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
 
       <SetGroup title="스마트폰 원격 조작">
         <div style={{ padding: 4 }}><RemotePanel embedded /></div>
-      </SetGroup>
-
-      <SetGroup title="AI 프로그램 생성">
-        <Row title="Anthropic API Key"
-          desc="AI 생성 기능에만 쓰입니다. 자동 조합은 키 없이 동작합니다.">
-          <input type="password" placeholder="sk-ant-..."
-            defaultValue={localStorage.getItem('ft_api_key') || ''}
-            onChange={e => localStorage.setItem('ft_api_key', e.target.value)}
-            style={{ width: 240, fontSize: 12 }} />
-        </Row>
       </SetGroup>
 
       <SetGroup title="데이터">
