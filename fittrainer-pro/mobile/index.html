@@ -114,6 +114,34 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
 .tg span{width:22px;height:22px;border-radius:11px;background:#fff;display:block}
 .srow.here{border-color:var(--accent);background:rgba(124,58,237,.10)}
 
+/* ---- 큰 화면(다른 PC·태블릿에서 열었을 때) ---- */
+@media (min-width:900px){
+  .top{padding:14px 24px}
+  .top h1{font-size:17px}
+  .screen{max-width:1080px;margin:0 auto;padding:8px 8px 90px}
+  .tabs{justify-content:center;gap:8px}
+  .tabs button{flex:0 0 132px}
+
+  /* 리모컨: 왼쪽 조작, 오른쪽 프로그램 */
+  #sc-remote{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    gap:24px;align-items:start}
+  #sc-remote .pane{min-width:0}
+  #sc-remote .q{min-width:0;padding:0}
+  #sc-remote .now{margin:0 0 14px}
+  #sc-remote .ctl{padding:0}
+  .b.primary{padding:18px}
+
+  /* 목록형 화면은 2단으로 */
+  #sc-customer,#sc-session,#sc-builder,#sc-settings{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:0 24px;align-content:start}
+  #sc-customer > .sec,#sc-session > .sec,#sc-builder > .sec,#sc-settings > .sec{
+    grid-column:1 / -1}
+  .card,.srow{margin-left:0;margin-right:0}
+  .field,.search{padding-left:0;padding-right:0;margin-left:0;width:100%}
+  .chips{padding-left:0}
+}
+
 /* ---- 폼 ---- */
 .field{padding:0 16px 14px}
 .field label{display:block;font-size:11px;color:var(--dim);letter-spacing:1.1px;
@@ -172,6 +200,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
   </div>
 
   <div class="screen" id="sc-remote">
+  <div class="pane">
   <div class="now" id="now">
     <div class="lab" id="now-lab">현재 동작</div>
     <div class="title" id="now-title">—</div>
@@ -199,6 +228,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
       <button data-v="1.5">1.5x</button><button data-v="2">2x</button>
     </div>
   </div>
+  </div><!-- /pane -->
 
   <div class="q">
     <div class="q-head">
