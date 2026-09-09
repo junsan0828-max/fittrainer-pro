@@ -211,6 +211,8 @@ ipcMain.handle('set-remote-pin', (_e, pin) => {
   return setPin(pin);
 });
 
+ipcMain.handle('set-device-name', (_e, name) => setDeviceName(name));
+
 ipcMain.handle('cancel-convert', () => { transcode.cancelAll(); return true; });
 
 ipcMain.handle('revoke-remote-devices', () => { revokeAll(); return true; });
@@ -222,7 +224,7 @@ ipcMain.on('window-maximize', () => {
 });
 ipcMain.on('window-close', () => mainWindow?.close());
 
-const { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo, setPin, revokeAll } = require('./server');
+const { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo, setPin, revokeAll, setDeviceName } = require('./server');
 ipcMain.on('player-state', (_e, state) => {
   updateState(state);
   const io = getIO();

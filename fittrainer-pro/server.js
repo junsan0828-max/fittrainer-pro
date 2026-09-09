@@ -29,11 +29,15 @@ function loadAuth() {
   } catch {
     auth = null;
   }
-  if (!auth || !auth.pin) {
-    auth = { pin: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), tokens: [] };
-    saveAuth();
-  }
+  // PIN 과 기기 ID 는 한 번 만들면 바뀌지 않는다.
+  // 폰에 저장된 QR/토큰이 계속 쓸 수 있어야 하기 때문이다.
+  let changed = false;
+  if (!auth) { auth = {}; }
+  if (!auth.pin) { auth.pin = String(crypto.randomInt(0, 1e6)).padStart(6, '0'); changed = true; }
+  if (!auth.deviceId) { auth.deviceId = crypto.randomBytes(8).toString('hex'); changed = true; }
+  if (!auth.deviceName) { auth.deviceName = `${os.hostname() || 'FitTrainer'} PC`; changed = true; }
   auth.tokens = auth.tokens || [];
+  if (changed) saveAuth();
   return auth;
 }
 
@@ -42,6 +46,15 @@ function saveAuth() {
 }
 
 function getPin() { return loadAuth().pin; }
+function getDeviceName() { return loadAuth().deviceName; }
+function getDeviceId() { return loadAuth().deviceId; }
+
+function setDeviceName(name) {
+  loadAuth();
+  auth.deviceName = String(name || '').trim().slice(0, 40) || auth.deviceName;
+  saveAuth();
+  return auth.deviceName;
+}
 
 function setPin(pin) {
   loadAuth();
@@ -86,8 +99,13 @@ app.post('/api/login', (req, res) => {
   res.json({ token: issueToken() });
 });
 
+app.get('/api/info', (_req, res) => {
+  res.json({ id: getDeviceId(), name: getDeviceName() });
+});
+
 app.get('/api/session', (req, res) => {
-  res.json({ ok: validToken(req.headers['x-remote-token']) });
+  res.json({ ok: validToken(req.headers['x-remote-token']),
+             id: getDeviceId(), name: getDeviceName() });
 });
 
 io.use((socket, next) => {
@@ -191,7 +209,9 @@ function getLocalIp() {
 
 function getRemoteInfo() {
   const ip = getLocalIp();
-  return { url: ip ? `http://${ip}:${PORT}` : null, ip, port: PORT, pin: getPin() };
+  return { url: ip ? `http://${ip}:${PORT}` : null, ip, port: PORT, pin: getPin(),
+           deviceName: getDeviceName(), deviceId: getDeviceId() };
 }
 
-module.exports = { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo, setPin, revokeAll };
+module.exports = { getIO, updateState, updateTick, setLibraryRoot, getRemoteInfo,
+                   setPin, revokeAll, setDeviceName };

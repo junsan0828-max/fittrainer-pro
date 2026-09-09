@@ -112,6 +112,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
   background:var(--border);transition:background .15s}
 .tg.on{background:var(--accent);justify-content:flex-end}
 .tg span{width:22px;height:22px;border-radius:11px;background:#fff;display:block}
+.srow.here{border-color:var(--accent);background:rgba(124,58,237,.10)}
 
 /* ---- 폼 ---- */
 .field{padding:0 16px 14px}
@@ -261,6 +262,8 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
     <div id="set-play"></div>
     <div class="sec">영상 변환</div>
     <div id="set-conv"></div>
+    <div class="sec">연결된 PC</div>
+    <div id="set-pcs"></div>
     <div class="sec">연결</div>
     <div id="set-conn"></div>
   </div>
@@ -311,8 +314,50 @@ const CONCEPTS = [
   ['circuit_full','전신 순환운동'], ['upper_core','상체 · 코어'], ['recovery','스트레칭 · 회복'],
 ];
 
-/* ---------- 로그인 ---------- */
+/* ---------- PC 목록 ---------- */
+// 토큰은 PC 마다 그 PC 의 localStorage 에만 둔다(브라우저가 출처별로 분리).
+// PC 명단은 화면 이동 시 주소에 실어 옮겨 서로 알게 한다.
 const KEY = 'ft_remote_token';
+const PCS = 'ft_pcs';
+const HERE = location.origin;
+
+const loadPcs = () => { try { return JSON.parse(localStorage.getItem(PCS)) || []; } catch { return []; } };
+const savePcs = list => { try { localStorage.setItem(PCS, JSON.stringify(list)); } catch {} };
+
+function rememberPc(info) {
+  const list = loadPcs();
+  const i = list.findIndex(p => p.url === HERE);
+  const entry = { url: HERE, id: info?.id || '', name: info?.name || HERE,
+                  nick: i >= 0 ? list[i].nick : '' };
+  if (i >= 0) list[i] = { ...list[i], ...entry }; else list.push(entry);
+  savePcs(list);
+}
+
+// 다른 PC 로 옮길 때 명단을 함께 넘긴다 (토큰은 넘기지 않는다)
+function gotoPc(url) {
+  const roster = loadPcs().map(({ url, id, name, nick }) => ({ url, id, name, nick }));
+  location.href = url + '/#pcs=' + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(roster)))));
+}
+
+// 주소로 넘어온 명단을 합친다
+(function mergeRoster() {
+  const m = location.hash.match(/pcs=([^&]+)/);
+  if (!m) return;
+  try {
+    const incoming = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
+    const list = loadPcs();
+    for (const pc of incoming) {
+      if (!pc?.url) continue;
+      const i = list.findIndex(x => x.url === pc.url);
+      if (i >= 0) list[i] = { ...pc, ...list[i], nick: list[i].nick || pc.nick };
+      else list.push(pc);
+    }
+    savePcs(list);
+  } catch {}
+  history.replaceState(null, '', location.pathname);
+})();
+
+const pcLabel = pc => pc.nick || pc.name || pc.url;
 
 async function login(pin) {
   const r = await fetch('/api/login', {
@@ -322,6 +367,7 @@ async function login(pin) {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '연결에 실패했습니다');
   const { token } = await r.json();
   localStorage.setItem(KEY, token);
+  try { rememberPc(await (await fetch('/api/info')).json()); } catch {}
   return token;
 }
 
@@ -348,11 +394,12 @@ function showLogin(msg) {
 
 /* ---------- 연결 ---------- */
 function connect(token) {
-  $('login').hidden = true; $('app').hidden = false;
+  $('login').hidden = true; $('app').hidden = false; $('tabs').hidden = false;
   socket = io({ auth: { token } });
 
   socket.on('connect', () => {
-    $('conn').textContent = '연결됨';
+    const me = loadPcs().find(p => p.url === HERE);
+    $('conn').textContent = me ? pcLabel(me) : '연결됨';
     $('dot').classList.add('on');
   });
   socket.on('disconnect', () => {
@@ -390,7 +437,7 @@ $('tabs').onclick = e => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   ['remote','customer','session','builder','settings'].forEach(n => { $('sc-' + n).hidden = n !== screen; });
   window.scrollTo(0, 0);
-  render(lastState);
+  render(lastState || {});
 };
 
 let toastTimer = null;
@@ -614,6 +661,7 @@ function renderTime() {
 const SPEEDS = [0.5, 1, 1.5, 2];
 
 function renderSettings(s) {
+  s = s || {};
   const st = s.settings || {};
   const tg = (on, key) =>
     `<button class="tg ${on ? 'on' : ''}" data-toggle="${key}"><span></span></button>`;
@@ -647,6 +695,28 @@ function renderSettings(s) {
       ${pending && !s.converting ? '<button class="icon-btn" data-convert="1">▶</button>' : ''}
     </div>`;
 
+  // PC 목록. 다른 PC 를 누르면 그 PC 화면으로 옮겨간다.
+  const pcs = loadPcs();
+  $('set-pcs').innerHTML = pcs.length ? pcs.map(pc => {
+    const here = pc.url === HERE;
+    return `<div class="srow ${here ? 'here' : ''}" data-pc="${pc.url}">
+      <div class="t">
+        <b>${pcLabel(pc)}${here ? ' <span style="font-size:11px;color:var(--accent)">· 사용 중</span>' : ''}</b>
+        <small>${pc.url}</small>
+      </div>
+      <button class="icon-btn" data-rename="${pc.url}">✎</button>
+      ${here ? '' : `<button class="icon-btn" data-switch="${pc.url}">▶</button>`}
+      ${here ? '' : `<button class="icon-btn danger" data-forget="${pc.url}">✕</button>`}
+    </div>`;
+  }).join('')
+    : '<div class="empty">이 PC 만 등록되어 있습니다.</div>';
+
+  $('set-pcs').insertAdjacentHTML('beforeend', `
+    <div class="srow" data-add="1" style="border-style:dashed">
+      <div class="t"><b style="color:var(--accent)">+ PC 추가</b>
+        <small>다른 PC 의 설정 화면에 적힌 접속 주소를 입력하면 목록에 추가됩니다.</small></div>
+    </div>`);
+
   $('set-conn').innerHTML = `
     <div class="srow">
       <div class="t"><b>이 기기 연결 해제</b>
@@ -672,7 +742,51 @@ $('sc-settings').addEventListener('click', e => {
     return;
   }
   if (e.target.closest('[data-convert]')) { send('convert-now'); toast('변환을 시작합니다'); return; }
-  if (e.target.closest('[data-logout]')) showLogin('연결을 해제했습니다');
+  if (e.target.closest('[data-logout]')) { showLogin('연결을 해제했습니다'); return; }
+
+  if (e.target.closest('[data-add]')) {
+    const v = prompt('추가할 PC 의 접속 주소\n(예: http://192.168.0.10:3737)', 'http://');
+    if (!v) return;
+    let url;
+    try {
+      url = new URL(v.trim().startsWith('http') ? v.trim() : 'http://' + v.trim());
+      if (!url.port) url.port = '3737';
+      url = url.origin;
+    } catch { return toast('주소를 확인해 주세요'); }
+    const list = loadPcs();
+    if (list.some(p => p.url === url)) return toast('이미 목록에 있습니다');
+    list.push({ url, id: '', name: url, nick: '' });
+    savePcs(list);
+    renderSettings(lastState);
+    toast('추가했습니다. 눌러서 접속하세요');
+    return;
+  }
+
+  const rn = e.target.closest('[data-rename]');
+  if (rn) {
+    const url = rn.dataset.rename;
+    const list = loadPcs();
+    const pc = list.find(p => p.url === url);
+    const v = prompt('이 PC 의 애칭', pcLabel(pc));
+    if (v !== null) {
+      pc.nick = v.trim();
+      savePcs(list);
+      renderSettings(lastState);
+      if (url === HERE) $('conn').textContent = pcLabel(pc);
+      toast('애칭을 바꿨습니다');
+    }
+    return;
+  }
+  const sw = e.target.closest('[data-switch]');
+  if (sw) { toast('PC 를 옮깁니다...'); gotoPc(sw.dataset.switch); return; }
+
+  const fg = e.target.closest('[data-forget]');
+  if (fg) {
+    const url = fg.dataset.forget;
+    if (!confirm('이 PC 를 목록에서 지울까요?')) return;
+    savePcs(loadPcs().filter(p => p.url !== url));
+    renderSettings(lastState);
+  }
 });
 
 /* ---------- 화면 ---------- */
@@ -680,7 +794,6 @@ function render(s) {
   if (!s) return;
   lastState = s;
   if (s.toast) toast(s.toast);
-  $('tabs').hidden = false;
 
   if (screen === 'customer') return renderCustomers(s);
   if (screen === 'session') return renderSession(s);
@@ -783,7 +896,8 @@ $('list').onclick = e => {
   const token = localStorage.getItem(KEY);
   if (!token) return showLogin();
   const r = await fetch('/api/session', { headers: { 'x-remote-token': token } }).catch(() => null);
-  if (r && (await r.json()).ok) connect(token);
+  const info = r ? await r.json().catch(() => null) : null;
+  if (info?.ok) { rememberPc(info); connect(token); }
   else showLogin();
 })();
 </script>

@@ -859,6 +859,23 @@ function RemotePanel({ embedded }) {
           )}
           <div style={{ flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 3 }}>이 PC 애칭</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input defaultValue={info.deviceName || ''} key={info.deviceName}
+                  onBlur={e => {
+                    const v = e.target.value.trim();
+                    if (v && v !== info.deviceName) {
+                      window.electronAPI?.setDeviceName?.(v).then(load);
+                    }
+                  }}
+                  placeholder="예: 1번 룸 PC"
+                  style={{ width: 200, fontSize: 13 }} />
+              </div>
+              <div style={{ fontSize: 11, color: T.dim, marginTop: 4 }}>
+                폰의 PC 목록에 이 이름으로 표시됩니다
+              </div>
+            </div>
+            <div>
               <div style={{ fontSize: 11, color: T.dim, marginBottom: 3 }}>접속 주소</div>
               <div style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
                 {info.url}
