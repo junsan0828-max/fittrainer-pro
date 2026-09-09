@@ -99,7 +99,10 @@ app.post('/api/login', (req, res) => {
   res.json({ token: issueToken() });
 });
 
+// 다른 PC 의 컨트롤러 화면이 이 PC 를 찾을 수 있어야 하므로 교차 출처를 허용한다.
+// 이름과 기기 ID 만 알려주며 비밀은 담기지 않는다.
 app.get('/api/info', (_req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
   res.json({ id: getDeviceId(), name: getDeviceName() });
 });
 

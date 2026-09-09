@@ -389,6 +389,40 @@ function gotoPc(url) {
 
 const pcLabel = pc => pc.nick || pc.name || pc.url;
 
+// 같은 네트워크를 훑어 FitTrainer PC 를 찾는다.
+// QR 을 못 찍는 PC 브라우저에서 주소를 손으로 치지 않아도 되게 하려는 것이다.
+async function scanLan(onProgress) {
+  const m = location.hostname.match(/^(\d+\.\d+\.\d+)\.(\d+)$/);
+  if (!m) return null;               // 도메인이나 localhost 로 접속한 경우
+  const base = m[1], port = location.port || '3737';
+  const found = [], queue = [];
+  for (let i = 1; i <= 254; i++) queue.push(i);
+
+  let done = 0;
+  const probe = async n => {
+    const url = `http://${base}.${n}:${port}`;
+    if (url !== location.origin) {
+      try {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), 1500);
+        const r = await fetch(url + '/api/info', { signal: c.signal, cache: 'no-store' });
+        clearTimeout(t);
+        if (r.ok) {
+          const info = await r.json();
+          if (info?.id) found.push({ url, id: info.id, name: info.name || url, nick: '' });
+        }
+      } catch {}
+    }
+    onProgress?.(++done, 254, found);
+  };
+
+  // 한꺼번에 254개를 던지면 브라우저가 막으므로 나눠서 보낸다
+  await Promise.all(Array.from({ length: 24 }, async () => {
+    while (queue.length) await probe(queue.shift());
+  }));
+  return found;
+}
+
 async function login(pin) {
   const r = await fetch('/api/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -742,9 +776,13 @@ function renderSettings(s) {
     : '<div class="empty">이 PC 만 등록되어 있습니다.</div>';
 
   $('set-pcs').insertAdjacentHTML('beforeend', `
+    <div class="srow" data-scan="1" style="border-style:dashed">
+      <div class="t"><b style="color:var(--accent)" id="scan-label">PC 찾기</b>
+        <small id="scan-sub">같은 네트워크에 켜져 있는 FitTrainer PC 를 자동으로 찾습니다.</small></div>
+    </div>
     <div class="srow" data-add="1" style="border-style:dashed">
-      <div class="t"><b style="color:var(--accent)">+ PC 추가</b>
-        <small>다른 PC 의 설정 화면에 적힌 접속 주소를 입력하면 목록에 추가됩니다.</small></div>
+      <div class="t"><b>주소로 직접 추가</b>
+        <small>PC 설정 화면에 적힌 접속 주소를 입력합니다.</small></div>
     </div>`);
 
   $('set-conn').innerHTML = `
@@ -755,7 +793,7 @@ function renderSettings(s) {
     </div>`;
 }
 
-$('sc-settings').addEventListener('click', e => {
+$('sc-settings').addEventListener('click', async e => {
   const t = e.target.closest('[data-toggle]');
   if (t) {
     const key = t.dataset.toggle;
@@ -773,6 +811,25 @@ $('sc-settings').addEventListener('click', e => {
   }
   if (e.target.closest('[data-convert]')) { send('convert-now'); toast('변환을 시작합니다'); return; }
   if (e.target.closest('[data-logout]')) { showLogin('연결을 해제했습니다'); return; }
+
+  if (e.target.closest('[data-scan]')) {
+    const lab = $('scan-label'), sub = $('scan-sub');
+    lab.textContent = 'PC 찾는 중...';
+    const list = await scanLan((n, total, found) => {
+      sub.textContent = `${Math.round(n / total * 100)}% · ${found.length}대 발견`;
+    });
+    if (list === null) {
+      lab.textContent = 'PC 찾기';
+      sub.textContent = 'IP 주소로 접속했을 때만 찾을 수 있습니다. 아래에서 직접 추가해 주세요.';
+      return;
+    }
+    const known = loadPcs();
+    const added = list.filter(pc => !known.some(k => k.url === pc.url));
+    if (added.length) { savePcs([...known, ...added]); }
+    renderSettings(lastState);
+    toast(added.length ? `${added.length}대를 목록에 추가했습니다` : '새로 찾은 PC 가 없습니다');
+    return;
+  }
 
   if (e.target.closest('[data-add]')) {
     const v = prompt('추가할 PC 의 접속 주소\n(예: http://192.168.0.10:3737)', 'http://');
