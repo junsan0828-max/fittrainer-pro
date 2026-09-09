@@ -631,7 +631,20 @@ function render(s) {
   } else if (cur?.type === 'rest') {
     $('now-lab').textContent = cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식';
     $('now-title').textContent = `${tick.restCountdown ?? cur.duration}초`;
-    $('now-meta').textContent = '';
+    // 쉬는 동안 다음에 뭘 하는지 보여준다
+    const nx = q.slice(ci + 1).find(i => i.type === 'clip');
+    if (nx) {
+      const c = nx.clip || {};
+      const [label, color] = CAT[c.code] || [];
+      $('now-meta').innerHTML =
+        `<span style="color:var(--dim)">다음 ·</span>`
+        + (c.code ? `<span class="chip" style="background:${color}22;color:${color}">${label || c.code}</span>` : '')
+        + `<span style="color:var(--text);font-weight:600">${c.name || ''}</span>`
+        + (c.reps ? `<span>${c.reps}회</span>` : '')
+        + (nx.totalSets > 1 ? `<span>세트 ${nx.setNum}/${nx.totalSets}</span>` : '');
+    } else {
+      $('now-meta').textContent = '';
+    }
   } else {
     $('now-lab').textContent = '현재 동작';
     $('now-title').textContent = '—';

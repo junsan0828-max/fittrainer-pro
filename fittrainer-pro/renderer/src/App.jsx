@@ -1749,6 +1749,15 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const playingRef = useRef(false);
+  // 휴식 중 다음 동작 미리보기
+  const [preview, setPreview] = useState(() => loadLS('ft_rest_preview', true));
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const previewRef = useRef(null);
+
+  function togglePreview(on) {
+    setPreview(on);
+    saveLS('ft_rest_preview', on);
+  }
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1847,6 +1856,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   useEffect(() => {
     if (cur?.type !== 'rest' && cur?.type !== 'break') return;
     setRestCountdown(cur.duration);
+    setPreviewFailed(false);
   }, [ci, cur?.type]);
 
   // 휴식/세션 간 휴식 카운트다운. 일시정지하면 같이 멈춘다.
@@ -1968,6 +1978,16 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   }
 
   const src = clipSrc(cur?.clip, playbackMap);
+
+  // 휴식 중 보여줄 다음 동작
+  const nextClip = useMemo(() => {
+    for (let i = ci + 1; i < queue.length; i++) {
+      if (queue[i].type === 'clip') return queue[i];
+    }
+    return null;
+  }, [queue, ci]);
+  const nextSrc = clipSrc(nextClip?.clip, playbackMap);
+  const restColor = cur?.restKind === 'set' ? '#F59E0B' : '#7C3AED';
 
   useEffect(() => {
     setVideoErr(null);
@@ -2111,23 +2131,77 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
         ) : cur?.type === 'rest' ? (
           <div style={{
             width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
+            alignItems: 'center', justifyContent: 'center', gap: 28, padding: 24,
             background: cur.restKind === 'set' ? 'rgba(245,158,11,.08)' : 'rgba(124,58,237,.08)',
           }}>
-            <div style={{
-              fontSize: 14, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 2, marginBottom: 16,
-              color: cur.restKind === 'set' ? '#F59E0B' : '#7C3AED',
-            }}>{cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}</div>
-            <div style={{
-              fontSize: 96, fontWeight: 800,
-              color: cur.restKind === 'set' ? '#F59E0B' : '#7C3AED',
-            }}>{restCountdown}</div>
-            <button onClick={skipRest} style={{
-              marginTop: 24, padding: '10px 24px', borderRadius: 8,
-              background: cur.restKind === 'set' ? '#F59E0B22' : '#7C3AED22',
-              color: cur.restKind === 'set' ? '#F59E0B' : '#7C3AED',
-              fontSize: 14, fontWeight: 600,
-            }}>건너뛰기</button>
+            {/* 카운트다운은 깨끗한 배경 위에 둔다. 영상 위에 얹으면 숫자가 묻힌다. */}
+            <div style={{ textAlign: 'center' }}>
+              <div style={{
+                fontSize: 14, fontWeight: 600, textTransform: 'uppercase',
+                letterSpacing: 2, color: restColor,
+              }}>{cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}</div>
+              <div style={{
+                fontSize: 104, fontWeight: 800, lineHeight: 1.05, color: restColor,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{restCountdown}</div>
+            </div>
+
+            {/* 다음 동작은 작은 카드로. 본운동 화면과 헷갈리지 않게 크기·테두리·라벨로 구분한다. */}
+            {preview && !previewFailed && nextClip && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 18, padding: 14,
+                borderRadius: 12, background: T.surface,
+                border: `1px solid ${T.border}`, maxWidth: 620,
+              }}>
+                <div style={{
+                  position: 'relative', width: 240, aspectRatio: '16 / 9', flexShrink: 0,
+                  borderRadius: 8, overflow: 'hidden', background: '#000',
+                }}>
+                  <video ref={previewRef} key={nextSrc} src={nextSrc}
+                    autoPlay muted loop playsInline
+                    onError={() => setPreviewFailed(true)}
+                    onLoadedData={e => e.currentTarget.play().catch(() => {})}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <span style={{
+                    position: 'absolute', top: 6, left: 6, padding: '3px 8px', borderRadius: 4,
+                    fontSize: 10, fontWeight: 700, letterSpacing: .8,
+                    background: 'rgba(0,0,0,.72)', color: '#fff',
+                  }}>다음 동작 미리보기</span>
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {nextClip.clip?.code && (
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
+                        background: (CAT_MAP[nextClip.clip.code]?.color || T.dimMid) + '22',
+                        color: CAT_MAP[nextClip.clip.code]?.color || T.dim,
+                      }}>{nextClip.clip.code}</span>
+                    )}
+                    <span style={{ fontSize: 20, fontWeight: 700 }}>{nextClip.clip?.name || ''}</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: T.dim, marginTop: 7 }}>
+                    {[nextClip.clip?.part,
+                      nextClip.clip?.reps ? `${nextClip.clip.reps}회` : '',
+                      nextClip.totalSets > 1 ? `세트 ${nextClip.setNum}/${nextClip.totalSets}` : '',
+                    ].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={skipRest} style={{
+                padding: '11px 26px', borderRadius: 8, fontSize: 14, fontWeight: 600,
+                background: restColor, color: '#fff',
+              }}>건너뛰기</button>
+              {nextClip && (
+                <button onClick={() => togglePreview(!preview)} style={{
+                  padding: '11px 18px', borderRadius: 8, fontSize: 13,
+                  background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+                }}>{preview ? '미리보기 끄기' : '미리보기 켜기'}</button>
+              )}
+            </div>
           </div>
         ) : null}
 
