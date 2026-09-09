@@ -276,6 +276,7 @@ function TabBar({ tab, setTab }) {
     { id: 'queue', label: '연속 재생' },
     { id: 'player', label: '재생' },
     { id: 'history', label: '기록' },
+    { id: 'settings', label: '설정' },
   ];
   return (
     <div style={{
@@ -318,8 +319,8 @@ function explainEmptyPool(enriched, sessionCfg) {
 
 // 카테고리가 비어 있는 클립들을 파일명 접두어별로 묶어 한 번에 분류하게 한다.
 // 분류가 안 된 클립은 자동 조합에서 통째로 제외되므로 눈에 띄게 알려야 한다.
-function PrefixMapper({ clips, prefixCats, setPrefixCat }) {
-  const [open, setOpen] = useState(false);
+function PrefixMapper({ clips, prefixCats, setPrefixCat, alwaysOpen }) {
+  const [open, setOpen] = useState(!!alwaysOpen);
 
   const groups = useMemo(() => {
     const m = {};
@@ -452,7 +453,8 @@ function CodecBanner({ codec, onConvert, autoConvert, onToggleAutoConvert, onSto
 }
 
 function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone, clipAttrs, setClipAttrs, codec, onConvert,
-                     autoConvert, onToggleAutoConvert, onStopConvert, prefixCats, setPrefixCat }) {
+                     autoConvert, onToggleAutoConvert, onStopConvert, prefixCats, setPrefixCat,
+                     onSelectFolder, onRescan }) {
   const [filter, setFilter] = useState('');
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -470,25 +472,6 @@ function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone
     }
     return list;
   }, [clips, catFilter, search]);
-
-  async function handleSelectFolder() {
-    if (!window.electronAPI) { alert('Electron 환경에서만 사용 가능합니다.'); return; }
-    const result = await window.electronAPI.selectFolder();
-    if (result) {
-      setClips(result.clips);
-      saveData('ft_clips', result.clips);
-      saveData('ft_folder', result.folder);
-    }
-  }
-
-  async function handleRescan() {
-    if (!window.electronAPI) return;
-    const result = await window.electronAPI.rescanFolder();
-    if (result) {
-      setClips(result.clips);
-      saveData('ft_clips', result.clips);
-    }
-  }
 
   function getClipWithAttrs(clip) {
     const attrs = clipAttrs[clip.filePath] || clipAttrs[clip.id];
@@ -519,11 +502,11 @@ function LibraryTab({ clips, setClips, onAddBlock, analysisDone, setAnalysisDone
     <div style={{ display: 'flex', height: '100%' }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRight: `1px solid ${T.border}` }}>
         <div style={{ padding: 12, display: 'flex', gap: 8, borderBottom: `1px solid ${T.border}` }}>
-          <button onClick={handleSelectFolder} style={{
+          <button onClick={onSelectFolder} style={{
             padding: '8px 16px', background: T.accent, color: '#fff', borderRadius: 6,
             fontSize: 13, fontWeight: 600,
           }}>폴더 선택</button>
-          <button onClick={handleRescan} style={{
+          <button onClick={onRescan} style={{
             padding: '8px 16px', background: T.panel, color: T.text, borderRadius: 6,
             fontSize: 13, border: `1px solid ${T.border}`,
           }}>재스캔</button>
@@ -827,7 +810,7 @@ function CustomersTab({ customers, setCustomers, setTab, setActiveCustomer, setS
 }
 
 // 폰으로 세션을 조작하기 위한 접속 정보. QR 을 찍으면 바로 리모컨이 열린다.
-function RemotePanel() {
+function RemotePanel({ embedded }) {
   const [info, setInfo] = useState(null);
   const [pinDraft, setPinDraft] = useState('');
   const [msg, setMsg] = useState('');
@@ -855,11 +838,11 @@ function RemotePanel() {
   }
 
   return (
-    <div style={{
+    <div style={embedded ? { padding: 12 } : {
       marginTop: 20, padding: 16, borderRadius: 10,
       background: T.panel, border: `1px solid ${T.border}`,
     }}>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>스마트폰 원격 조작</div>
+      {!embedded && <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>스마트폰 원격 조작</div>}
       <div style={{ fontSize: 12, color: T.dim, marginBottom: 14, lineHeight: 1.6 }}>
         폰이 이 PC 와 같은 와이파이에 있어야 합니다.
       </div>
@@ -1116,14 +1099,9 @@ ${Object.entries(libSummary).map(([k,v]) => `[${k}] ${v.join(', ')}`).join('\n')
         </div>
       )}
 
-      <div style={{ marginTop: 8, marginBottom: 12 }}>
-        <label style={{ fontSize: 11, color: T.dim, display: 'block', marginBottom: 4 }}>API Key</label>
-        <input type="password" placeholder="sk-ant-..." defaultValue={localStorage.getItem('ft_api_key') || ''}
-          onChange={e => localStorage.setItem('ft_api_key', e.target.value)}
-          style={{ width: '100%' }} />
+      <div style={{ marginTop: 8, marginBottom: 12, fontSize: 12, color: T.dim }}>
+        API Key 와 원격 조작 설정은 <b style={{ color: T.text }}>설정</b> 탭으로 옮겼습니다.
       </div>
-
-      <RemotePanel />
 
       {aiError && <div style={{ color: '#E84040', fontSize: 12, marginBottom: 8, padding: 8, background: '#E8404011', borderRadius: 6 }}>{aiError}</div>}
 
@@ -1432,6 +1410,157 @@ const BREAK_PRESETS = [0, 60, 180, 300, 600, 900];
 
 function sessionSeconds(ses) {
   return expandToQueue(ses?.blocks || []).reduce((n, it) => n + itemSeconds(it), 0);
+}
+
+// 설정 화면의 한 줄. 제목/설명 왼쪽, 조작 오른쪽.
+function Row({ title, desc, children }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 16, padding: '14px 16px',
+      borderBottom: `1px solid ${T.border}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{title}</div>
+        {desc && <div style={{ fontSize: 12, color: T.dim, marginTop: 3, lineHeight: 1.5 }}>{desc}</div>}
+      </div>
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>{children}</div>
+    </div>
+  );
+}
+
+function SetGroup({ title, children }) {
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{
+        fontSize: 11, color: T.dim, letterSpacing: 1.3, textTransform: 'uppercase',
+        marginBottom: 8, paddingLeft: 2,
+      }}>{title}</div>
+      <div style={{
+        borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`,
+        overflow: 'hidden',
+      }}>{children}</div>
+    </div>
+  );
+}
+
+function Toggle({ on, onChange }) {
+  return (
+    <button onClick={() => onChange(!on)} aria-pressed={on} style={{
+      width: 44, height: 26, borderRadius: 13, padding: 3, display: 'flex',
+      justifyContent: on ? 'flex-end' : 'flex-start',
+      background: on ? T.accent : T.border, transition: 'background .15s',
+    }}>
+      <span style={{
+        width: 20, height: 20, borderRadius: 10, background: '#fff',
+        transition: 'transform .15s',
+      }} />
+    </button>
+  );
+}
+
+// 흩어져 있던 설정을 한곳에 모은다.
+function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
+                       codec, onConvert, clips, prefixCats, setPrefixCat,
+                       libraryFolder, onSelectFolder, onRescan,
+                       history, setHistory, sessions }) {
+  const unconverted = codec?.unsupported?.length || 0;
+  const converting = codec?.state === 'converting';
+
+  return (
+    <div style={{ height: '100%', overflowY: 'auto', padding: 20, maxWidth: 860 }}>
+      <SetGroup title="라이브러리">
+        <Row title="운동 영상 폴더"
+          desc={libraryFolder || '아직 폴더를 선택하지 않았습니다'}>
+          <button onClick={onSelectFolder} style={{
+            padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+            background: T.accent, color: '#fff',
+          }}>폴더 변경</button>
+          <button onClick={onRescan} style={{
+            padding: '7px 14px', borderRadius: 6, fontSize: 12,
+            background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+          }}>다시 읽기</button>
+        </Row>
+        <Row title="불러온 영상" desc="파일명 접두어로 종류를 나눕니다">
+          <span style={{ fontSize: 13, color: T.dim, fontVariantNumeric: 'tabular-nums' }}>
+            {clips.length}개
+          </span>
+        </Row>
+      </SetGroup>
+
+      <SetGroup title="영상 분류">
+        <div style={{ padding: 4 }}>
+          <PrefixMapper clips={clips} prefixCats={prefixCats} setPrefixCat={setPrefixCat} alwaysOpen />
+        </div>
+      </SetGroup>
+
+      <SetGroup title="영상 변환">
+        <Row title="자동으로 미리 변환"
+          desc="재생할 수 없는 형식(H.265 등)을 앱이 켜져 있을 때 미리 바꿔 둡니다. 세션 중에 기다리지 않아도 됩니다.">
+          <Toggle on={!!autoConvert} onChange={onToggleAutoConvert} />
+        </Row>
+        <Row title="변환이 필요한 영상"
+          desc={converting ? '지금 변환하고 있습니다' : unconverted ? '아직 변환되지 않았습니다' : '모두 재생할 수 있습니다'}>
+          <span style={{ fontSize: 13, color: unconverted ? '#F59E0B' : '#22C55E' }}>
+            {unconverted ? `${unconverted}개` : '없음'}
+          </span>
+          {unconverted > 0 && !converting && (
+            <button onClick={onConvert} style={{
+              padding: '7px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              background: '#F87171', color: '#fff',
+            }}>지금 변환</button>
+          )}
+        </Row>
+      </SetGroup>
+
+      <SetGroup title="재생">
+        <Row title="휴식 중 다음 동작 미리보기"
+          desc="쉬는 동안 다음 동작 영상을 무음으로 보여줍니다.">
+          <Toggle on={settings.restPreview !== false}
+            onChange={v => onSetting('restPreview', v)} />
+        </Row>
+        <Row title="기본 재생 속도" desc="재생을 시작할 때의 배속입니다.">
+          <div className="pl-speed" style={{ background: T.panel }}>
+            {[0.5, 1, 1.5, 2].map(v => (
+              <button key={v} className={settings.defaultSpeed === v ? 'on' : ''}
+                onClick={() => onSetting('defaultSpeed', v)}>{v}x</button>
+            ))}
+          </div>
+        </Row>
+      </SetGroup>
+
+      <SetGroup title="스마트폰 원격 조작">
+        <div style={{ padding: 4 }}><RemotePanel embedded /></div>
+      </SetGroup>
+
+      <SetGroup title="AI 프로그램 생성">
+        <Row title="Anthropic API Key"
+          desc="AI 생성 기능에만 쓰입니다. 자동 조합은 키 없이 동작합니다.">
+          <input type="password" placeholder="sk-ant-..."
+            defaultValue={localStorage.getItem('ft_api_key') || ''}
+            onChange={e => localStorage.setItem('ft_api_key', e.target.value)}
+            style={{ width: 240, fontSize: 12 }} />
+        </Row>
+      </SetGroup>
+
+      <SetGroup title="데이터">
+        <Row title="저장된 프로그램" desc="연속 재생 탭에서 만듭니다">
+          <span style={{ fontSize: 13, color: T.dim }}>{sessions.length}개</span>
+        </Row>
+        <Row title="재생 기록" desc="최근 500건까지 남습니다">
+          <span style={{ fontSize: 13, color: T.dim }}>{history.length}건</span>
+          {history.length > 0 && (
+            <button onClick={() => {
+              if (!confirm('재생 기록을 모두 지울까요?')) return;
+              setHistory([]); saveData('ft_history', []);
+            }} style={{
+              padding: '7px 14px', borderRadius: 6, fontSize: 12,
+              background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+            }}>비우기</button>
+          )}
+        </Row>
+      </SetGroup>
+    </div>
+  );
 }
 
 // 세션을 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
@@ -1757,7 +1886,8 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
   );
 }
 
-function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi, onProgressLog }) {
+function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi,
+                    onProgressLog, settings, onSetting }) {
   const [queue, setQueue] = useState([]);
   const [videoErr, setVideoErr] = useState(null);
   const [converting, setConverting] = useState(false);
@@ -1765,21 +1895,16 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const playingRef = useRef(false);
-  // 휴식 중 다음 동작 미리보기
-  const [preview, setPreview] = useState(() => loadLS('ft_rest_preview', true));
   const [previewFailed, setPreviewFailed] = useState(false);
   const previewRef = useRef(null);
-
-  function togglePreview(on) {
-    setPreview(on);
-    saveLS('ft_rest_preview', on);
-  }
+  const preview = settings.restPreview;
+  const togglePreview = on => onSetting('restPreview', on);
   const [ci, setCi] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [restCountdown, setRestCountdown] = useState(0);
-  const [speed, setSpeed] = useState(1);
+  const [speed, setSpeed] = useState(settings.defaultSpeed || 1);
   const videoRef = useRef(null);
   const hideTimer = useRef(null);
   const restTimer = useRef(null);
@@ -2356,6 +2481,10 @@ export default function App() {
     [playlist, sessions],
   );
 
+  // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
+  // clips 가 이 값을 참조하므로 반드시 먼저 선언되어야 한다.
+  const [durations, setDurations] = useState({});
+
   const clips = useMemo(
     () => rawClips.map(c => {
       const code = resolveCode(c, prefixCats);
@@ -2381,11 +2510,24 @@ export default function App() {
   // 원본 경로 -> 변환된 H.264 경로
   const [playbackMap, setPlaybackMap] = useState({});
   const [codec, setCodec] = useState({ state: 'idle', unsupported: [], progress: null });
-  // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
-  const [durations, setDurations] = useState({});
   // 재생 불가 영상은 앱을 켜둔 동안 알아서 미리 변환해 둔다.
   // 세션 중에 변환을 기다리는 일이 없어야 한다.
   const [autoConvert, setAutoConvert] = useState(() => loadLS('ft_auto_convert', true));
+
+  // 앱 전반 설정. 설정 탭과 폰에서 함께 고친다.
+  const [settings, setSettings] = useState(() => ({
+    restPreview: true,
+    defaultSpeed: 1,
+    ...loadLS('ft_settings', {}),
+  }));
+
+  function setSetting(key, value) {
+    setSettings(prev => {
+      const next = { ...prev, [key]: value };
+      saveData('ft_settings', next);
+      return next;
+    });
+  }
   const [sessionCfg, setSessionCfg] = useState({
     duration: 30, intensity: '중강도', focus: '전신',
     condition: '보통', includeCats: [], method: 'auto',
@@ -2448,13 +2590,17 @@ export default function App() {
       activeCustomerId: activeCustomer?.id || null,
       sessionCfg,
       blocks,
+      settings,
+      autoConvert,
+      codecPending: codec.unsupported.length,
+      converting: codec.state === 'converting',
       sessions: sessions.map(x => ({
         id: x.id, name: x.name, count: x.blocks.length, seconds: sessionSeconds(x),
       })),
       // 폰에서 동작을 추가할 때 고르는 목록. 재생에 필요없는 필드는 뺀다.
       clips: clips.map(c => ({ id: c.id, code: c.code, name: c.name, part: c.part, reps: c.reps })),
     });
-  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips, sessions]);
+  }, [playerState, customers, activeCustomer, sessionCfg, blocks, clips, sessions, settings, autoConvert, codec]);
 
   // 여기도 최신 상태를 봐야 하므로 ref 로 유지한다
   const appRemoteRef = useRef(null);
@@ -2548,6 +2694,15 @@ export default function App() {
           if (ses && cmd.play) playSession(ses.id);
           break;
         }
+        case 'set-setting':
+          if (cmd.key) setSetting(cmd.key, cmd.value);
+          break;
+        case 'set-auto-convert':
+          toggleAutoConvert(!!cmd.value);
+          break;
+        case 'convert-now':
+          convertUnsupported();
+          break;
         case 'set-tab':
           if (cmd.tab) setTab(cmd.tab);
           break;
@@ -2560,6 +2715,25 @@ export default function App() {
     if (!window.electronAPI?.onRemote) return;
     return window.electronAPI.onRemote(cmd => appRemoteRef.current?.(cmd));
   }, []);
+
+  const [libraryFolder, setLibraryFolder] = useState(() => loadLS('ft_folder', ''));
+
+  async function selectFolder() {
+    if (!window.electronAPI) { alert('Electron 환경에서만 사용 가능합니다.'); return; }
+    const result = await window.electronAPI.selectFolder();
+    if (!result) return;
+    setClips(result.clips);
+    setLibraryFolder(result.folder);
+    saveData('ft_clips', result.clips);
+    saveData('ft_folder', result.folder);
+  }
+
+  async function rescanFolder() {
+    const result = await window.electronAPI?.rescanFolder?.();
+    if (!result) return;
+    setClips(result.clips);
+    saveData('ft_clips', result.clips);
+  }
 
   // 재생 진행 상황을 기록에 남긴다.
   // 같은 큐를 재생하는 동안에는 한 건을 계속 갱신하고, 큐가 바뀌면 새로 만든다.
@@ -2739,13 +2913,15 @@ export default function App() {
         api.loadData('ft_sessions'),
         api.loadData('ft_playlist'),
         api.loadData('ft_history'),
-      ]).then(([cust, blks, attrs, ses, pl, hist]) => {
+        api.loadData('ft_settings'),
+      ]).then(([cust, blks, attrs, ses, pl, hist, cfg]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
         if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
         if (hist)  { setHistory(hist);    saveLS('ft_history',    hist); }
+        if (cfg)   { setSettings(p => ({ ...p, ...cfg })); saveLS('ft_settings', cfg); }
       }).catch(() => {});
     }
 
@@ -2755,6 +2931,7 @@ export default function App() {
         if (result?.clips?.length > 0) {
           setClips(result.clips);
           saveLS('ft_clips', result.clips);
+          if (result.folder) { setLibraryFolder(result.folder); saveLS('ft_folder', result.folder); }
         }
       }).catch(() => {});
     }
@@ -2776,7 +2953,8 @@ export default function App() {
             clipAttrs={clipAttrs} setClipAttrs={setClipAttrs}
             codec={codec} onConvert={() => convertUnsupported()}
             autoConvert={autoConvert} onToggleAutoConvert={toggleAutoConvert} onStopConvert={stopConvert}
-            prefixCats={prefixCats} setPrefixCat={setPrefixCat} />
+            prefixCats={prefixCats} setPrefixCat={setPrefixCat}
+            onSelectFolder={selectFolder} onRescan={rescanFolder} />
         )}
         {tab === 'customers' && (
           <CustomersTab customers={customers} setCustomers={setCustomers}
@@ -2798,7 +2976,15 @@ export default function App() {
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
             playbackMap={playbackMap} onConvertOne={convertOne}
             onReport={setPlayerState} registerApi={registerPlayerApi}
-            onProgressLog={logProgress} />}
+            onProgressLog={logProgress} settings={settings} onSetting={setSetting} />}
+        {tab === 'settings' && (
+          <SettingsTab settings={settings} onSetting={setSetting}
+            autoConvert={autoConvert} onToggleAutoConvert={toggleAutoConvert}
+            codec={codec} onConvert={() => convertUnsupported()}
+            clips={clips} prefixCats={prefixCats} setPrefixCat={setPrefixCat}
+            libraryFolder={libraryFolder} onSelectFolder={selectFolder} onRescan={rescanFolder}
+            history={history} setHistory={setHistory} sessions={sessions} />
+        )}
         {tab === 'history' && (
           <HistoryTab history={history} setHistory={setHistory} customers={customers} />
         )}
