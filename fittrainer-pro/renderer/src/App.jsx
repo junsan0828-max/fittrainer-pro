@@ -65,6 +65,22 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 .pl-speed button:hover{color:#fff;background:rgba(255,255,255,.12)}
 .pl-speed button.on{background:${T.accent};color:#fff}
 
+/* ---- 휴식 화면 ---- */
+.rest-split{display:flex;width:100%;height:100%}
+.rest-side{flex:1;min-width:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:28px;gap:18px}
+.rest-side + .rest-side{border-left:1px solid rgba(255,255,255,.10)}
+.rest-lab{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:2px}
+.rest-num{font-weight:800;line-height:1;font-variant-numeric:tabular-nums;
+  font-size:clamp(72px,13vw,170px)}
+.rest-vid{width:100%;flex:1;min-height:0;border-radius:10px;overflow:hidden;
+  background:#000;position:relative}
+.rest-vid video{width:100%;height:100%;object-fit:contain}
+@media (max-width:900px){
+  .rest-split{flex-direction:column}
+  .rest-side + .rest-side{border-left:none;border-top:1px solid rgba(255,255,255,.10)}
+}
+
 @media (prefers-reduced-motion:reduce){
   .pl-bar{animation:none}
   .pl-btn,.pl-seek-track,.pl-seek-knob,.pl-speed button{transition:none}
@@ -2129,48 +2145,45 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
             }}>지금 시작</button>
           </div>
         ) : cur?.type === 'rest' ? (
-          <div style={{
-            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 28, padding: 24,
+          <div className="rest-split" style={{
             background: cur.restKind === 'set' ? 'rgba(245,158,11,.08)' : 'rgba(124,58,237,.08)',
           }}>
-            {/* 카운트다운은 깨끗한 배경 위에 둔다. 영상 위에 얹으면 숫자가 묻힌다. */}
-            <div style={{ textAlign: 'center' }}>
-              <div style={{
-                fontSize: 14, fontWeight: 600, textTransform: 'uppercase',
-                letterSpacing: 2, color: restColor,
-              }}>{cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}</div>
-              <div style={{
-                fontSize: 104, fontWeight: 800, lineHeight: 1.05, color: restColor,
-                fontVariantNumeric: 'tabular-nums',
-              }}>{restCountdown}</div>
+            {/* 왼쪽: 카운트다운. 영상과 겹치지 않는 깨끗한 면이라 숫자가 묻히지 않는다. */}
+            <div className="rest-side">
+              <div className="rest-lab" style={{ color: restColor }}>
+                {cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}
+              </div>
+              <div className="rest-num" style={{ color: restColor }}>{restCountdown}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={skipRest} style={{
+                  padding: '11px 26px', borderRadius: 8, fontSize: 14, fontWeight: 600,
+                  background: restColor, color: '#fff',
+                }}>건너뛰기</button>
+                {nextClip && (
+                  <button onClick={() => togglePreview(!preview)} style={{
+                    padding: '11px 18px', borderRadius: 8, fontSize: 13,
+                    background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+                  }}>{preview ? '미리보기 끄기' : '미리보기 켜기'}</button>
+                )}
+              </div>
             </div>
 
-            {/* 다음 동작은 작은 카드로. 본운동 화면과 헷갈리지 않게 크기·테두리·라벨로 구분한다. */}
+            {/* 오른쪽: 다음 동작. 화면이 갈려 있어 본운동 화면과 헷갈리지 않는다. */}
             {preview && !previewFailed && nextClip && (
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 18, padding: 14,
-                borderRadius: 12, background: T.surface,
-                border: `1px solid ${T.border}`, maxWidth: 620,
-              }}>
-                <div style={{
-                  position: 'relative', width: 240, aspectRatio: '16 / 9', flexShrink: 0,
-                  borderRadius: 8, overflow: 'hidden', background: '#000',
-                }}>
+              <div className="rest-side" style={{ gap: 14 }}>
+                <div className="rest-lab" style={{ color: T.dim, alignSelf: 'flex-start' }}>
+                  다음 동작 미리보기
+                </div>
+
+                <div className="rest-vid">
                   <video ref={previewRef} key={nextSrc} src={nextSrc}
                     autoPlay muted loop playsInline
                     onError={() => setPreviewFailed(true)}
-                    onLoadedData={e => e.currentTarget.play().catch(() => {})}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <span style={{
-                    position: 'absolute', top: 6, left: 6, padding: '3px 8px', borderRadius: 4,
-                    fontSize: 10, fontWeight: 700, letterSpacing: .8,
-                    background: 'rgba(0,0,0,.72)', color: '#fff',
-                  }}>다음 동작 미리보기</span>
+                    onLoadedData={e => e.currentTarget.play().catch(() => {})} />
                 </div>
 
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ alignSelf: 'flex-start', width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                     {nextClip.clip?.code && (
                       <span style={{
                         fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 4,
@@ -2178,9 +2191,12 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
                         color: CAT_MAP[nextClip.clip.code]?.color || T.dim,
                       }}>{nextClip.clip.code}</span>
                     )}
-                    <span style={{ fontSize: 20, fontWeight: 700 }}>{nextClip.clip?.name || ''}</span>
+                    <span style={{
+                      fontSize: 22, fontWeight: 700, overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>{nextClip.clip?.name || ''}</span>
                   </div>
-                  <div style={{ fontSize: 13, color: T.dim, marginTop: 7 }}>
+                  <div style={{ fontSize: 13, color: T.dim, marginTop: 6 }}>
                     {[nextClip.clip?.part,
                       nextClip.clip?.reps ? `${nextClip.clip.reps}회` : '',
                       nextClip.totalSets > 1 ? `세트 ${nextClip.setNum}/${nextClip.totalSets}` : '',
@@ -2189,19 +2205,6 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
                 </div>
               </div>
             )}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={skipRest} style={{
-                padding: '11px 26px', borderRadius: 8, fontSize: 14, fontWeight: 600,
-                background: restColor, color: '#fff',
-              }}>건너뛰기</button>
-              {nextClip && (
-                <button onClick={() => togglePreview(!preview)} style={{
-                  padding: '11px 18px', borderRadius: 8, fontSize: 13,
-                  background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
-                }}>{preview ? '미리보기 끄기' : '미리보기 켜기'}</button>
-              )}
-            </div>
           </div>
         ) : null}
 
