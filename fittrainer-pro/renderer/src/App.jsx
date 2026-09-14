@@ -25,9 +25,8 @@ const FOCUS_OPTIONS = ['전신', '상체', '하체', '코어', '어깨', '등', 
 const CONDITIONS = ['컨디션 좋음', '보통', '피로 / 회복 필요'];
 
 const css = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
-body,#root{font-family:Inter,-apple-system,sans-serif;background:${T.bg};color:${T.text};width:100vw;height:100vh;overflow:hidden}
+body,#root{font-family:'Pretendard','Malgun Gothic','맑은 고딕',-apple-system,'Apple SD Gothic Neo','Segoe UI',sans-serif;background:${T.bg};color:${T.text};width:100vw;height:100vh;overflow:hidden}
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:${T.dimMid};border-radius:2px}
@@ -2921,7 +2920,8 @@ export default function App() {
         api.loadData('ft_playlist'),
         api.loadData('ft_history'),
         api.loadData('ft_settings'),
-      ]).then(([cust, blks, attrs, ses, pl, hist, cfg]) => {
+        api.loadData('ft_prefix_cats'),
+      ]).then(([cust, blks, attrs, ses, pl, hist, cfg, prefix]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
@@ -2929,6 +2929,9 @@ export default function App() {
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
         if (hist)  { setHistory(hist);    saveLS('ft_history',    hist); }
         if (cfg)   { setSettings(p => ({ ...p, ...cfg })); saveLS('ft_settings', cfg); }
+        // 파일에만 남아 있던 분류 설정을 되살린다.
+        // 브라우저 저장소가 비워져도 접두어 매핑을 잃지 않게 한다.
+        if (prefix) { setPrefixCats(prefix); saveLS('ft_prefix_cats', prefix); }
       }).catch(() => {});
     }
 

@@ -12,7 +12,40 @@ permissions:
   contents: write
 
 jobs:
+  # 빌드 성공과 앱이 실제로 뜨는 것은 다른 문제다.
+  # 1.1.0~1.9.0 은 모두 빌드에 성공했지만 실행하면 흰 화면으로 죽었다.
+  # 설치 파일을 만들기 전에 화면을 진짜로 띄워 모든 탭을 눌러 본다.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: fittrainer-pro/package-lock.json
+
+      - name: Install dependencies
+        working-directory: fittrainer-pro
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: fittrainer-pro
+        run: npx playwright install --with-deps chromium
+
+      - name: Build renderer
+        working-directory: fittrainer-pro
+        run: npm run build:renderer
+
+      - name: Smoke test
+        working-directory: fittrainer-pro
+        run: npm test
+
   build:
+    needs: smoke
     runs-on: windows-latest
 
     steps:
@@ -41,6 +74,12 @@ jobs:
       - name: Install dependencies
         working-directory: fittrainer-pro
         run: npm ci
+
+      # 입력한 버전이 설치 파일과 앱 정보에도 반영되게 한다.
+      # 이 단계가 없어서 릴리스 태그만 올라가고 앱은 계속 1.0.0 이라고 표시됐다.
+      - name: Set version
+        working-directory: fittrainer-pro
+        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version --allow-same-version
 
       - name: Build renderer
         working-directory: fittrainer-pro
