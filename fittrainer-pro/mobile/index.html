@@ -604,14 +604,14 @@ function renderPrograms(s) {
         <div class="nm"><b>${x.name}</b><small>${x.count}개 동작 · ${human(x.seconds)}</small></div>
         <button class="icon-btn" data-play-session="${x.id}">▶</button>
       </div>`).join('')
-    : '<div class="empty">아직 만들어진 시퀀스이 없습니다.<br>위에서 컨셉을 눌러 보세요.</div>';
+    : '<div class="empty">아직 만들어진 시퀀스가 없습니다.<br>위에서 컨셉을 눌러 보세요.</div>';
 }
 
 $('sc-session').addEventListener('click', e => {
   const gen = e.target.closest('[data-concept]');
   if (gen) {
     send('generate-concept', { concept: gen.dataset.concept });
-    toast('시퀀스을 만드는 중...');
+    toast('시퀀스를 만드는 중...');
     return;
   }
   const play = e.target.closest('[data-play-session]');
@@ -695,7 +695,7 @@ $('bl-lib').onclick = e => {
 };
 $('bl-search').oninput = e => { libFilter = e.target.value; renderBuilder(lastState || {}); };
 $('bl-clear').onclick = () => {
-  if (confirm('시퀀스을 전부 비울까요?')) send('blocks-clear');
+  if (confirm('시퀀스를 전부 비울까요?')) send('blocks-clear');
 };
 
 // 매초 오는 tick 으로 시간 표시만 갱신한다. 목록은 다시 그리지 않는다.
@@ -943,7 +943,7 @@ function render(s) {
 
   if (q.length === 0) {
     $('list').innerHTML =
-      '<div class="empty">재생 중인 시퀀스이 없습니다.<br>PC 에서 시퀀스을 먼저 만들어 주세요.</div>';
+      '<div class="empty">재생 중인 시퀀스가 없습니다.<br>PC 에서 시퀀스를 먼저 만들어 주세요.</div>';
     return;
   }
 

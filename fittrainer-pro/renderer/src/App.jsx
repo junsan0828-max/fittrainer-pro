@@ -88,9 +88,48 @@ button{font-family:inherit;cursor:pointer;border:none;outline:none}
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
+// 시퀀스 사이의 간격.
+// 바로 이어서 갈지, 몇 분 쉬고 갈지, 아니면 벽시계로 정한 시각에 시작할지.
+// 정각 모드는 남은 시간이 매 순간 달라지므로 길이를 미리 못 박지 않고
+// 휴식이 시작되는 시점에 계산한다.
+const GAP_PRESETS = [0, 5, 10, 15];
+
+function normalizeGap(gap) {
+  if (!gap) return { mode: 'wait', minutes: 10 };
+  if (gap.mode === 'clock') return { mode: 'clock', at: gap.at || nextHourClock() };
+  return { mode: 'wait', minutes: Number(gap.minutes) || 0 };
+}
+
+// 'HH:MM' 까지 남은 초. 이미 지난 시각이면 다음 날 같은 시각으로 본다.
+function secondsUntilClock(at, from = new Date()) {
+  const [h, m] = String(at || '').split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+  const target = new Date(from);
+  target.setHours(h, m, 0, 0);
+  let diff = Math.round((target - from) / 1000);
+  if (diff < 0) diff += 24 * 3600;
+  return diff;
+}
+
+// 지금 이후 가장 가까운 정각
+function nextHourClock(from = new Date()) {
+  const d = new Date(from);
+  d.setHours(d.getHours() + 1, 0, 0, 0);
+  return `${String(d.getHours()).padStart(2, '0')}:00`;
+}
+
+function gapLabel(gap) {
+  const g = normalizeGap(gap);
+  if (g.mode === 'clock') return `${g.at} 시작`;
+  if (g.minutes === 0) return '바로 시작';
+  return `${g.minutes}분 뒤`;
+}
+
 // 큐 한 항목이 차지하는 시간(초). 영상은 ffprobe 로 읽어둔 길이를 쓴다.
 function itemSeconds(it) {
   if (!it) return 0;
+  // 정각 대기는 고정 길이가 없다. 지금 기준으로 환산해 총 시간에 반영한다.
+  if (it.type === 'break' && it.untilClock) return secondsUntilClock(it.untilClock);
   if (it.type === 'rest' || it.type === 'break') return it.duration || 0;
   return it.clip?.duration || 0;
 }
@@ -1301,24 +1340,37 @@ function expandToQueue(blocks, sessionName) {
   return q;
 }
 
-// 여러 시퀀스을 하나의 큐로 잇는다.
-// 시퀀스과 시퀀스 사이에는 'break' 항목이 들어가고, 그게 끝나면 다음 시퀀스이 이어서 재생된다.
+// 여러 시퀀스를 하나의 큐로 잇는다.
+// 시퀀스와 시퀀스 사이에는 'break' 항목이 들어가고, 그게 끝나면 다음 시퀀스가 이어서 재생된다.
 function expandPlaylist(entries) {
   const q = [];
   entries.forEach((entry, i) => {
     const part = expandToQueue(entry.blocks || [], entry.name);
     if (part.length === 0) return;
 
-    // 마지막 동작 뒤의 전환 휴식은 시퀀스 사이 휴식과 겹치므로 뺀다
-    const isLastOfSession = i < entries.length - 1;
-    if (isLastOfSession && part[part.length - 1]?.type === 'rest') part.pop();
+    // 마지막 동작 뒤의 전환 휴식은 시퀀스 사이 간격과 겹치므로 뺀다.
+    // 다만 '바로 시작'이면 겹칠 간격이 없으니 그대로 둔다.
+    const g = normalizeGap(entries[i]?.gap);
+    const hasGap = i < entries.length - 1
+      && (g.mode === 'clock' || g.minutes > 0);
+    if (hasGap && part[part.length - 1]?.type === 'rest') part.pop();
 
     q.push(...part);
     const next = entries[i + 1];
-    if (next && entry.breakAfter > 0) {
+    if (!next) return;
+    const gap = normalizeGap(entry.gap);
+    if (gap.mode === 'clock') {
       q.push({
         type: 'break',
-        duration: entry.breakAfter,
+        untilClock: gap.at,
+        duration: 0,          // 실제 길이는 휴식이 시작될 때 정해진다
+        sessionName: entry.name,
+        nextName: next.name,
+      });
+    } else if (gap.minutes > 0) {
+      q.push({
+        type: 'break',
+        duration: gap.minutes * 60,
         sessionName: entry.name,
         nextName: next.name,
       });
@@ -1518,7 +1570,7 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
   );
 }
 
-// 시퀀스을 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
+// 시퀀스를 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
 function HistoryTab({ history, setHistory, customers }) {
   const [who, setWho] = useState('');
 
@@ -1585,7 +1637,7 @@ function HistoryTab({ history, setHistory, customers }) {
       {shown.length === 0 ? (
         <div style={{ fontSize: 12, color: T.dim, padding: 30, textAlign: 'center', lineHeight: 1.8 }}>
           아직 기록이 없습니다.<br />
-          시퀀스을 재생하면 자동으로 남습니다.
+          시퀀스를 재생하면 자동으로 남습니다.
         </div>
       ) : shown.map(h => {
         const pct = h.totalClips ? Math.round((h.doneClips / h.totalClips) * 100) : 0;
@@ -1628,91 +1680,126 @@ function HistoryTab({ history, setHistory, customers }) {
   );
 }
 
-function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab,
+// 만들어진 시퀀스 목록이 곧 재생 대기열이다.
+// 체크한 것만 위에서부터 이어서 재생되고, 시퀀스 사이 간격은 각 줄에서 정한다.
+function QueueTab({ sessions, setSessions, blocks, setTab,
                    customer, sessionCfg, onGenerate, onPlaySession, missingPaths }) {
   const [name, setName] = useState('');
 
-  const entries = useMemo(
-    () => playlist.map(p => {
-      const ses = sessions.find(x => x.id === p.sessionId);
-      return ses ? { ...ses, breakAfter: p.breakAfter } : null;
-    }).filter(Boolean),
-    [playlist, sessions],
-  );
+  const patch = fn => setSessions(prev => {
+    const next = fn(prev); saveData('ft_sessions', next); return next;
+  });
 
+  // 체크된 시퀀스가 재생 순서 그대로 대기열이 된다
+  const queued = useMemo(() => sessions.filter(s => s.queued !== false), [sessions]);
   const totalSec = useMemo(
-    () => expandPlaylist(entries).reduce((n, it) => n + itemSeconds(it), 0),
-    [entries],
+    () => expandPlaylist(queued).reduce((n, it) => n + itemSeconds(it), 0),
+    [queued],
   );
 
   function saveCurrent() {
     const label = name.trim();
     if (!label) return alert('시퀀스 이름을 입력하세요.');
     if (blocks.length === 0) return alert('시퀀스 빌더에 동작이 없습니다.');
-    const ses = { id: uid(), name: label, blocks, savedAt: Date.now() };
-    setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
+    patch(prev => [...prev, { id: uid(), name: label, blocks, savedAt: Date.now() }]);
     setName('');
   }
 
-  function removeSession(id) {
-    setSessions(prev => { const next = prev.filter(s => s.id !== id); saveData('ft_sessions', next); return next; });
-    setPlaylist(prev => { const next = prev.filter(p => p.sessionId !== id); saveData('ft_playlist', next); return next; });
-  }
-
-  function addToPlaylist(id) {
-    setPlaylist(prev => {
-      const next = [...prev, { sessionId: id, breakAfter: 600 }];
-      saveData('ft_playlist', next);
-      return next;
+  function move(i, dir) {
+    patch(prev => {
+      const n = [...prev]; const j = i + dir;
+      if (j < 0 || j >= n.length) return prev;
+      [n[i], n[j]] = [n[j], n[i]];
+      return n;
     });
   }
 
-  const patchPlaylist = fn => setPlaylist(prev => { const next = fn(prev); saveData('ft_playlist', next); return next; });
+  function setGap(id, gap) {
+    patch(prev => prev.map(s => (s.id === id ? { ...s, gap } : s)));
+  }
+
+  const allOn = sessions.length > 0 && queued.length === sessions.length;
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
-      <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div style={{ maxWidth: 760, margin: '0 auto' }}>
 
-        {/* 시퀀스 만들기 + 목록 */}
-        <div style={{ flex: 1, minWidth: 340 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>시퀀스 만들기</div>
-          <div style={{ fontSize: 12, color: T.dim, marginBottom: 10, lineHeight: 1.6 }}>
-            {customer?.name
-              ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
-              : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
-            <br />컨셉을 누르면 시퀀스이 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
+        {/* 시퀀스 만들기 */}
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>시퀀스 만들기</div>
+        <div style={{ fontSize: 12, color: T.dim, marginBottom: 10, lineHeight: 1.6 }}>
+          {customer?.name
+            ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
+            : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
+          <br />컨셉을 누르면 시퀀스가 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
+        </div>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 22 }}>
+          {CONCEPTS.map(c => (
+            <button key={c.code} onClick={() => onGenerate(c.code)} style={{
+              padding: '10px 15px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+              background: T.accent, color: '#fff',
+            }}>+ {c.label}</button>
+          ))}
+        </div>
+
+        {/* 목록 = 대기열 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>시퀀스 목록</span>
+          {sessions.length > 0 && (
+            <>
+              <span style={{ fontSize: 12, color: T.dim }}>
+                {queued.length}/{sessions.length}개 선택 · 총 {humanTime(totalSec)}
+              </span>
+              <button
+                onClick={() => patch(prev => prev.map(s => ({ ...s, queued: !allOn })))}
+                style={{
+                  marginLeft: 'auto', padding: '4px 10px', borderRadius: 6, fontSize: 11,
+                  background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+                }}>{allOn ? '전체 해제' : '전체 선택'}</button>
+            </>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: T.dim, marginBottom: 10 }}>
+          체크한 시퀀스가 위에서부터 이어서 재생됩니다. 더블클릭하면 그것만 재생합니다.
+        </div>
+
+        {sessions.length === 0 ? (
+          <div style={{ fontSize: 12, color: T.dim, padding: 24, textAlign: 'center', lineHeight: 1.7 }}>
+            아직 만들어진 시퀀스가 없습니다.<br />위에서 컨셉을 눌러 보세요.
           </div>
+        ) : sessions.map((ses, i) => {
+          const on = ses.queued !== false;
+          const secs = expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0);
+          const broken = ses.blocks.filter(b => missingPaths?.has(b.clip?.filePath)).length;
+          const order = on ? queued.findIndex(q => q.id === ses.id) + 1 : 0;
+          // 뒤에 재생될 시퀀스가 있어야 간격을 정할 의미가 있다
+          const hasNext = on && order > 0 && order < queued.length;
+          const gap = normalizeGap(ses.gap);
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
-            {CONCEPTS.map(c => (
-              <button key={c.code} onClick={() => onGenerate(c.code)} style={{
-                padding: '10px 15px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-                background: T.accent, color: '#fff',
-              }}>+ {c.label}</button>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>만들어진 시퀀스</span>
-            <span style={{ fontSize: 11, color: T.dim }}>더블클릭하면 바로 재생됩니다</span>
-          </div>
-
-          {sessions.length === 0 ? (
-            <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
-              아직 만들어진 시퀀스이 없습니다.<br />위에서 컨셉을 눌러 보세요.
-            </div>
-          ) : sessions.map(ses => {
-            const secs = expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0);
-            const broken = ses.blocks.filter(b => missingPaths?.has(b.clip?.filePath)).length;
-            return (
-              <div key={ses.id}
+          return (
+            <div key={ses.id}>
+              <div
                 onDoubleClick={() => onPlaySession(ses.id)}
-                title="더블클릭하면 재생됩니다"
+                title="더블클릭하면 이 시퀀스만 재생됩니다"
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                  background: T.surface, border: `1px solid ${T.border}`,
-                  borderRadius: 8, marginBottom: 6, cursor: 'pointer', userSelect: 'none',
+                  background: T.surface, borderRadius: 8, userSelect: 'none',
+                  border: `1px solid ${on ? T.accent + '55' : T.border}`,
+                  opacity: on ? 1 : 0.55,
                 }}>
+                <input type="checkbox" checked={on} aria-label={`${ses.name} 대기열에 포함`}
+                  onChange={() => patch(prev => prev.map(x =>
+                    (x.id === ses.id ? { ...x, queued: !on } : x)))}
+                  style={{ width: 17, height: 17, accentColor: T.accent,
+                           cursor: 'pointer', flexShrink: 0 }} />
+                <span style={{
+                  width: 22, height: 22, borderRadius: 11, flexShrink: 0,
+                  background: on ? T.accent : 'transparent',
+                  border: on ? 'none' : `1px solid ${T.border}`,
+                  color: on ? '#fff' : T.dimMid, fontSize: 11, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>{on ? order : '–'}</span>
+
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
                   <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
@@ -1724,128 +1811,98 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
                     )}
                   </div>
                 </div>
-                <button onClick={e => { e.stopPropagation(); onPlaySession(ses.id); }} style={{
+
+                <button disabled={i === 0} onClick={() => move(i, -1)}
+                  style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
+                    color: i === 0 ? T.dimMid : T.dim, fontSize: 12 }}>↑</button>
+                <button disabled={i === sessions.length - 1} onClick={() => move(i, 1)}
+                  style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
+                    color: i === sessions.length - 1 ? T.dimMid : T.dim, fontSize: 12 }}>↓</button>
+                <button onClick={() => onPlaySession(ses.id)} style={{
                   padding: '6px 14px', borderRadius: 6, background: T.accent,
                   color: '#fff', fontSize: 12, fontWeight: 600,
                 }}>재생</button>
-                <button onClick={e => { e.stopPropagation(); addToPlaylist(ses.id); }} style={{
-                  padding: '6px 12px', borderRadius: 6, background: T.accent + '22',
-                  color: T.accent, fontSize: 12, fontWeight: 600,
-                }}>대기열</button>
-                <button onClick={e => { e.stopPropagation(); removeSession(ses.id); }} style={{
+                <button onClick={() => patch(prev => prev.filter(x => x.id !== ses.id))} style={{
                   padding: '6px 10px', borderRadius: 6, background: 'transparent',
                   color: T.dim, fontSize: 13, border: `1px solid ${T.border}`,
                 }}>✕</button>
               </div>
-            );
-          })}
 
-          {blocks.length > 0 && (
-            <div style={{
-              display: 'flex', gap: 8, marginTop: 14, paddingTop: 14,
-              borderTop: `1px solid ${T.border}`,
-            }}>
-              <input value={name} onChange={e => setName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && saveCurrent()}
-                placeholder="빌더의 현재 구성을 이 이름으로 저장" style={{ flex: 1, fontSize: 12 }} />
-              <button onClick={saveCurrent} style={{
-                padding: '8px 14px', borderRadius: 6, background: T.panel, color: T.text,
-                fontSize: 12, border: `1px solid ${T.border}`, whiteSpace: 'nowrap',
-              }}>저장</button>
-            </div>
-          )}
-        </div>
-
-        {/* 재생 대기열 */}
-        <div style={{ flex: 1, minWidth: 340 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>재생 대기열</span>
-            {totalSec > 0 && (
-              <span style={{ fontSize: 12, color: T.dim }}>총 {humanTime(totalSec)}</span>
-            )}
-            {playlist.length > 0 && (
-              <button onClick={() => patchPlaylist(() => [])} style={{
-                marginLeft: 'auto', padding: '4px 10px', borderRadius: 6, fontSize: 11,
-                background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
-              }}>비우기</button>
-            )}
-          </div>
-
-          {entries.length === 0 ? (
-            <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
-              대기열이 비어 있습니다.<br />
-              왼쪽에서 시퀀스을 추가하면 순서대로 이어서 재생됩니다.
-            </div>
-          ) : (
-            <>
-              {entries.map((e, i) => (
-                <div key={i}>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                    background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8,
-                  }}>
-                    <span style={{
-                      width: 22, height: 22, borderRadius: 11, background: T.accent,
-                      color: '#fff', fontSize: 11, fontWeight: 700,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>{i + 1}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600 }}>{e.name}</div>
-                      <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
-                        {e.blocks.length}개 동작
-                      </div>
-                    </div>
-                    <button disabled={i === 0}
-                      onClick={() => patchPlaylist(prev => {
-                        const n = [...prev]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; return n;
+              {hasNext && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                  padding: '8px 12px 8px 46px', fontSize: 12, color: T.dim,
+                }}>
+                  <span>다음 시퀀스는</span>
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {GAP_PRESETS.map(m => {
+                      const sel = gap.mode === 'wait' && gap.minutes === m;
+                      return (
+                        <button key={m}
+                          onClick={() => setGap(ses.id, { mode: 'wait', minutes: m })}
+                          style={{
+                            padding: '4px 9px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                            background: sel ? '#22C55E' : T.panel,
+                            color: sel ? '#fff' : T.dim,
+                          }}>{m === 0 ? '바로 시작' : `${m}분 뒤`}</button>
+                      );
+                    })}
+                    <button
+                      onClick={() => setGap(ses.id, {
+                        mode: 'clock', at: gap.mode === 'clock' ? gap.at : nextHourClock(),
                       })}
-                      style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
-                        color: i === 0 ? T.dimMid : T.dim, fontSize: 12 }}>↑</button>
-                    <button disabled={i === entries.length - 1}
-                      onClick={() => patchPlaylist(prev => {
-                        const n = [...prev]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; return n;
-                      })}
-                      style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
-                        color: i === entries.length - 1 ? T.dimMid : T.dim, fontSize: 12 }}>↓</button>
-                    <button onClick={() => patchPlaylist(prev => prev.filter((_, j) => j !== i))}
-                      style={{ padding: '4px 9px', borderRadius: 5, background: 'transparent',
-                        color: T.dim, fontSize: 12, border: `1px solid ${T.border}` }}>✕</button>
+                      style={{
+                        padding: '4px 9px', borderRadius: 5, fontSize: 11, fontWeight: 600,
+                        background: gap.mode === 'clock' ? '#22C55E' : T.panel,
+                        color: gap.mode === 'clock' ? '#fff' : T.dim,
+                      }}>지정 시각</button>
                   </div>
-
-                  {i < entries.length - 1 && (
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '8px 12px 8px 34px', fontSize: 12, color: T.dim,
-                    }}>
-                      <span>다음까지 휴식</span>
-                      <div style={{ display: 'flex', gap: 3 }}>
-                        {BREAK_PRESETS.map(sec => (
-                          <button key={sec}
-                            onClick={() => patchPlaylist(prev =>
-                              prev.map((p, j) => (j === i ? { ...p, breakAfter: sec } : p)))}
-                            style={{
-                              padding: '4px 9px', borderRadius: 5, fontSize: 11, fontWeight: 600,
-                              background: e.breakAfter === sec ? '#22C55E' : T.panel,
-                              color: e.breakAfter === sec ? '#fff' : T.dim,
-                            }}>{sec === 0 ? '없음' : sec < 60 ? `${sec}초` : `${sec / 60}분`}</button>
-                        ))}
-                      </div>
-                    </div>
+                  {gap.mode === 'clock' && (
+                    <>
+                      <input type="time" value={gap.at} step={300}
+                        aria-label="다음 시퀀스 시작 시각"
+                        onChange={e => setGap(ses.id, { mode: 'clock', at: e.target.value })}
+                        style={{ fontSize: 12, padding: '4px 8px' }} />
+                      <button onClick={() => setGap(ses.id, { mode: 'clock', at: nextHourClock() })}
+                        style={{
+                          padding: '4px 9px', borderRadius: 5, fontSize: 11,
+                          background: 'transparent', color: T.dim,
+                          border: `1px solid ${T.border}`,
+                        }}>다음 정각</button>
+                    </>
                   )}
                 </div>
-              ))}
+              )}
+            </div>
+          );
+        })}
 
-              <button onClick={() => setTab('player')} style={{
-                width: '100%', marginTop: 14, padding: '12px 20px', borderRadius: 8,
-                background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
-              }}>대기열 재생 ({entries.length}개 시퀀스 · {humanTime(totalSec)})</button>
-            </>
-          )}
-        </div>
+        {blocks.length > 0 && (
+          <div style={{
+            display: 'flex', gap: 8, marginTop: 14, paddingTop: 14,
+            borderTop: `1px solid ${T.border}`,
+          }}>
+            <input value={name} onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveCurrent()}
+              placeholder="빌더의 현재 구성을 이 이름으로 저장" style={{ flex: 1, fontSize: 12 }} />
+            <button onClick={saveCurrent} style={{
+              padding: '8px 14px', borderRadius: 6, background: T.panel, color: T.text,
+              fontSize: 12, border: `1px solid ${T.border}`, whiteSpace: 'nowrap',
+            }}>저장</button>
+          </div>
+        )}
+
+        {queued.length > 0 && (
+          <button onClick={() => setTab('player')} style={{
+            width: '100%', marginTop: 18, padding: '12px 20px', borderRadius: 8,
+            background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
+          }}>이어서 재생 ({queued.length}개 시퀀스 · {humanTime(totalSec)})</button>
+        )}
       </div>
     </div>
   );
 }
+
 
 function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, registerApi,
                     onProgressLog, settings, onSetting }) {
@@ -1957,7 +2014,8 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
 
   useEffect(() => {
     if (cur?.type !== 'rest' && cur?.type !== 'break') return;
-    setRestCountdown(cur.duration);
+    // 정각 대기는 시작하는 순간에야 남은 시간이 정해진다
+    setRestCountdown(cur.untilClock ? secondsUntilClock(cur.untilClock) : cur.duration);
     setPreviewFailed(false);
   }, [ci, cur?.type]);
 
@@ -1965,6 +2023,14 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   useEffect(() => {
     if ((cur?.type !== 'rest' && cur?.type !== 'break') || !playing) return;
     restTimer.current = setInterval(() => {
+      // 정각 대기는 남은 시간을 빼는 대신 시계를 다시 본다.
+      // 그래야 일시정지했다 재개해도 지정한 시각에 정확히 시작한다.
+      if (cur.untilClock) {
+        const left = secondsUntilClock(cur.untilClock);
+        if (left <= 0) { clearInterval(restTimer.current); goNext(); }
+        else setRestCountdown(left);
+        return;
+      }
       setRestCountdown(prev => {
         if (prev <= 1) { clearInterval(restTimer.current); goNext(); return 0; }
         return prev - 1;
@@ -2213,7 +2279,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
             <div style={{
               fontSize: 13, fontWeight: 600, letterSpacing: 2, color: '#22C55E',
               textTransform: 'uppercase', marginBottom: 10,
-            }}>시퀀스 간 휴식</div>
+            }}>{cur.untilClock ? `${cur.untilClock} 시작 대기` : '시퀀스 간 휴식'}</div>
             <div style={{
               fontSize: 108, fontWeight: 800, color: '#22C55E', lineHeight: 1,
               fontVariantNumeric: 'tabular-nums',
@@ -2426,21 +2492,25 @@ export default function App() {
   const [rawClips, setClips] = useState(() => loadLS('ft_clips', []));
   // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
-  // 저장된 시퀀스과 재생 대기열
+  // 저장된 시퀀스와 재생 대기열
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
   const [history, setHistory] = useState(() => loadLS('ft_history', []));
   // 지금 진행 중인 기록의 id. 큐가 바뀌면 새 기록을 만든다.
   const runRef = useRef({ id: null, key: '' });
 
-  // 대기열에 담긴 시퀀스들. 재생 탭이 이걸로 큐를 만든다.
-  const playlistEntries = useMemo(
-    () => playlist.map(p => {
-      const ses = sessions.find(x => x.id === p.sessionId);
-      return ses ? { ...ses, breakAfter: p.breakAfter } : null;
-    }).filter(Boolean),
-    [playlist, sessions],
-  );
+  // 재생 탭이 쓰는 큐.
+  // 평소에는 체크된 시퀀스가 곧 대기열이고, 한 개만 재생하라는 지시가 있으면
+  // 그동안만 그것으로 갈음한다.
+  const playlistEntries = useMemo(() => {
+    if (playlist.length) {
+      return playlist.map(p => {
+        const ses = sessions.find(x => x.id === p.sessionId);
+        return ses ? { ...ses, gap: { mode: 'wait', minutes: 0 } } : null;
+      }).filter(Boolean);
+    }
+    return sessions.filter(s => s.queued !== false);
+  }, [playlist, sessions]);
 
   // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
   // clips 가 이 값을 참조하므로 반드시 먼저 선언되어야 한다.
@@ -2696,7 +2766,7 @@ export default function App() {
     saveData('ft_clips', result.clips);
   }
 
-  // 시퀀스이 참조하는 영상 중 폴더에서 사라진 것을 찾는다.
+  // 시퀀스가 참조하는 영상 중 폴더에서 사라진 것을 찾는다.
   // 재생 도중에야 오류로 알게 되는 일이 없도록 미리 알려준다.
   const missing = useMemo(() => {
     if (clips.length === 0) return [];   // 아직 안 읽었으면 판단할 수 없다
@@ -2773,7 +2843,7 @@ export default function App() {
     });
   }
 
-  // 컨셉을 누르면 그 자리에서 시퀀스을 만들어 목록에 넣는다.
+  // 컨셉을 누르면 그 자리에서 시퀀스를 만들어 목록에 넣는다.
   // 같은 컨셉을 다시 눌러도 클립 풀을 매번 섞으므로 다른 구성이 나온다.
   function generateConcept(code) {
     const con = CONCEPT_MAP[code];
@@ -2814,10 +2884,17 @@ export default function App() {
     return ses;
   }
 
-  // 만들어진 시퀀스을 바로 재생한다
+  useEffect(() => {
+    if (tab === 'queue' && playlist.length) {
+      setPlaylist([]);
+      saveData('ft_playlist', []);
+    }
+  }, [tab, playlist.length]);
+
+  // 목록에서 하나만 골라 바로 재생한다. 대기열 설정은 건드리지 않는다.
   function playSession(id) {
     if (!sessions.some(x => x.id === id)) return;
-    const next = [{ sessionId: id, breakAfter: 0 }];
+    const next = [{ sessionId: id }];
     setPlaylist(next);
     saveData('ft_playlist', next);
     setTab('player');
@@ -2979,7 +3056,7 @@ export default function App() {
         )}
         {tab === 'queue' && (
           <QueueTab sessions={sessions} setSessions={setSessions}
-            playlist={playlist} setPlaylist={setPlaylist} blocks={blocks} setTab={setTab}
+            blocks={blocks} setTab={setTab}
             customer={activeCustomer} sessionCfg={sessionCfg}
             onGenerate={generateConcept} onPlaySession={playSession}
             missingPaths={missingPathSet} />

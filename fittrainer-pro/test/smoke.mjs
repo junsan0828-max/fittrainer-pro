@@ -47,13 +47,20 @@ const CLIPS = [
     part: '전신', reps: 20, duration: 45, filePath: 'C:/v/c.mp4', playbackPath: 'C:/v/c.mp4' },
 ];
 
+const block = (clip, sets = 2) =>
+  ({ uid: 'b_' + clip.id, clip, sets, restBetweenSets: 20, restAfter: 60 });
+
 const STORE = {
   ft_customers: [{ id: 'u1', name: '홍길동', goal: '체지방 감소', level: '초급', notes: '' }],
-  ft_blocks: [{ uid: 'b1', clipId: 'c1', name: '스쿼트', phase: 'main', sets: 3, reps: 15 }],
+  ft_blocks: [block(CLIPS[0])],
   ft_clip_attrs: {},
-  ft_sessions: [{ id: 's1', name: '테스트 세션', blocks: ['b1'] }],
+  // 시퀀스 사이 간격을 시험하려면 두 개 이상이어야 한다
+  ft_sessions: [
+    { id: 's1', name: '아침 시퀀스', blocks: [block(CLIPS[0]), block(CLIPS[1])] },
+    { id: 's2', name: '저녁 시퀀스', blocks: [block(CLIPS[2])] },
+  ],
   ft_playlist: [],
-  ft_history: [{ id: 'h1', at: Date.now(), name: '테스트 세션', seconds: 2700 }],
+  ft_history: [{ id: 'h1', at: Date.now(), name: '아침 시퀀스', seconds: 2700 }],
   ft_settings: {},
   ft_prefix_cats: { AE: 'CAR', MU: 'STR', ST: 'STT' },
 };
@@ -71,7 +78,7 @@ page.on('console', m => {
   if (m.type() !== 'error') return;
   const t = m.text();
   // 가짜 경로의 영상과 외부 폰트는 이 환경에서 당연히 실패한다
-  if (/net::ERR|Failed to load resource|MEDIA_ELEMENT_ERROR|play\(\) request/i.test(t)) return;
+  if (/net::ERR|Failed to load resource|MEDIA_ELEMENT_ERROR|play\(\) request|Not allowed to load local resource/i.test(t)) return;
   failures.push(`console: ${t}`);
 });
 
@@ -126,6 +133,48 @@ for (const label of TABS) {
   }
   console.log(`${failures.length === before ? '  OK' : 'FAIL'}  ${label}`);
 }
+
+// 시퀀스 목록: 체크로 대기열을 고르고, 사이 간격을 정하는 화면
+async function checkQueueTab() {
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[시퀀스 목록] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+  const before = failures.length;
+  await page.getByRole('button', { name: '시퀀스 목록', exact: true }).first().click();
+  await page.waitForTimeout(300);
+
+  await step('체크박스가 시퀀스마다 있어야 함', async () => {
+    const n = await page.locator('input[type=checkbox]').count();
+    if (n < 2) throw new Error(`체크박스 ${n}개`);
+  });
+
+  await step('간격 버튼이 보여야 함', async () => {
+    for (const label of ['바로 시작', '5분 뒤', '10분 뒤', '15분 뒤', '지정 시각']) {
+      if (await page.getByRole('button', { name: label, exact: true }).count() === 0)
+        throw new Error(`'${label}' 없음`);
+    }
+  });
+
+  await step('지정 시각을 고르면 시각 입력이 나와야 함', async () => {
+    await page.getByRole('button', { name: '지정 시각', exact: true }).first().click();
+    await page.waitForTimeout(250);
+    if (await page.locator('input[type=time]').count() === 0)
+      throw new Error('시각 입력이 나타나지 않음');
+    if (await page.getByRole('button', { name: '다음 정각', exact: true }).count() === 0)
+      throw new Error("'다음 정각' 버튼이 없음");
+  });
+
+  await step('체크를 풀면 간격 설정이 사라져야 함', async () => {
+    await page.locator('input[type=checkbox]').first().uncheck();
+    await page.waitForTimeout(250);
+    if (await page.getByRole('button', { name: '지정 시각', exact: true }).count() !== 0)
+      throw new Error('체크를 풀었는데도 간격 설정이 남아 있음');
+    await page.locator('input[type=checkbox]').first().check();
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  시퀀스 목록 · 체크와 간격`);
+}
+await checkQueueTab();
 
 await browser.close();
 server.close();
