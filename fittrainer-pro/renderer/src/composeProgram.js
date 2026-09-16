@@ -279,8 +279,26 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter);
   const cost = c => blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter);
 
+  // 시간을 채울 때는 코어부터 쓴다. 코어는 어느 구성에나 자연스럽게 붙고,
+  // 같은 동작을 반복하거나 휴식을 늘리는 것보다 운동으로서 낫다.
+  // 코어가 없는 컨셉(스트레칭·회복)은 그 컨셉의 재료로 채운다.
+  const fillOrder = queues.core.length
+    ? [queues.core, queues.str, queues.car, queues.warm, queues.cool]
+    : [queues.cool, queues.warm, queues.str, queues.car];
+
+  // 가장 짧은 후보를 꺼낸다. 필요하면 상한을 넘겨서라도 꺼낸다.
+  const takeShortest = (limit) => {
+    let best = null, bestQ = null, bestIdx = -1;
+    for (const q of fillOrder) {
+      q.forEach((c, k) => {
+        if (limit != null && now() + cost(c) > limit) return;
+        if (!best || cost(c) < cost(best)) { best = c; bestQ = q; bestIdx = k; }
+      });
+    }
+    return best ? bestQ.splice(bestIdx, 1)[0] : null;
+  };
+
   // 모자라면 남은 풀에서 본운동을 더 채운다. 여기서는 softMax 를 지킨다.
-  const fillOrder = [queues.str, queues.core, queues.car, queues.warm, queues.cool];
   let guard = 0;
   while (now() < targetSec && guard++ < 400) {
     let picked = null;
@@ -300,42 +318,37 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     mainClips.pop();
   }
 
-  // 여기서부터는 목표를 채우는 수단들이다. 초과폭이 작은 것부터 쓴다.
-  // 휴식 늘리기가 가장 잘게 조절되므로 먼저 쓰고, 그래도 모자랄 때 세트와
-  // 클립을 건드린다. 어느 경우에도 목표 아래로는 끝내지 않는다.
+  // 아직 크게 모자라면 동작을 더 넣어 메운다. 휴식만 늘리면 운동이 아니라
+  // 쉬는 시간이 길어질 뿐이라, 1분 반이 넘는 구멍은 동작으로 채운다.
+  const REST_PATCH_MAX = 90;
+  guard = 0;
+  while (now() + REST_PATCH_MAX < targetSec && guard++ < 400) {
+    const picked = takeShortest(null);
+    if (!picked) break;
+    mainClips.push(picked);
+  }
+
+  // 남은 자투리는 동작 사이 휴식으로 정확히 맞춘다
   if (now() < targetSec && mainClips.length > 0) {
     const add = Math.ceil((targetSec - now()) / mainClips.length);
     restAfter = Math.min(restAfter + add, 180);
   }
 
-  // 클립이 부족하면 세트를 늘린다
+  // 풀이 비어 그래도 모자라면 세트를 늘린다
   while (now() < targetSec && mainSets < 6) mainSets += 1;
 
-  // 세트를 늘렸다면 휴식으로 다시 미세 조정할 여지가 생긴다
   if (now() < targetSec && mainClips.length > 0) {
     const add = Math.ceil((targetSec - now()) / mainClips.length);
     restAfter = Math.min(restAfter + add, 180);
   }
 
-  // 그래도 모자라면 남은 클립을 짧은 것부터 넣는다. 넘어도 좋다.
-  guard = 0;
-  while (now() < targetSec && guard++ < 400) {
-    let best = null, bestQ = null, bestIdx = -1;
-    for (const q of fillOrder) {
-      q.forEach((c, i2) => {
-        if (!best || cost(c) < cost(best)) { best = c; bestQ = q; bestIdx = i2; }
-      });
-    }
-    if (!best) break;
-    mainClips.push(bestQ.splice(bestIdx, 1)[0]);
-  }
-
-  // 라이브러리가 너무 작아 풀이 비었다면 쓰던 동작을 한 번 더 돌린다.
-  // 같은 동작이 반복되더라도 목표 시간을 채우는 쪽을 택한다.
+  // 라이브러리가 너무 작아 더 넣을 게 없으면 쓰던 동작을 다시 돌린다.
+  // 이때도 코어를 먼저 돌려 같은 근력 동작이 반복되는 것을 피한다.
   if (now() < targetSec && mainClips.length > 0) {
-    const cycle = [...mainClips];
-    let i2 = 0, repeatGuard = 0;
-    while (now() < targetSec && repeatGuard++ < 400) mainClips.push(cycle[i2++ % cycle.length]);
+    const coreCodes = ['CCS', 'CCB'];
+    const cycle = [...mainClips.filter(c => coreCodes.includes(c.code)), ...mainClips];
+    let k = 0, repeatGuard = 0;
+    while (now() < targetSec && repeatGuard++ < 400) mainClips.push(cycle[k++ % cycle.length]);
   }
 
   mainClips = avoidConsecutiveSamePart(mainClips);

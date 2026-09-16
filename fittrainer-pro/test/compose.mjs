@@ -81,6 +81,40 @@ for (const [label, clips] of CASES) {
   }
 }
 
+// ---- 시간을 무엇으로 채우는가 ----
+// 목표를 하한으로 삼으면 자칫 휴식만 늘리거나 같은 동작을 반복해 시간을 채우게 된다.
+// 코어는 어느 구성에나 붙일 수 있으니 그걸로 메워야 한다.
+const CORE = ['CCS', 'CCB'];
+{
+  const clips = lib(200, i => 40 + (i % 21));
+  let restMax = 0, core = 0, main = 0, dup = 0, runs = 0;
+  for (const con of Object.values(CONCEPT_MAP)) {
+    if (!con.cats.some(c => CORE.includes(c))) continue;   // 코어 없는 컨셉은 해당 없음
+    for (let k = 0; k < RUNS; k++) {
+      const r = composeProgram({ enrichedClips: clips, customer: {},
+        sessionCfg: { duration: 45, includeCats: con.cats, focus: con.focus, method: con.method } });
+      restMax = Math.max(restMax, r.restAfter);
+      core += r.mainClips.filter(c => CORE.includes(c.code)).length;
+      main += r.mainClips.length;
+      dup += r.mainClips.length - new Set(r.mainClips.map(c => c.id)).size;
+      runs++;
+    }
+  }
+  const corePct = (core / main) * 100;
+  const dupAvg = dup / runs;
+
+  // 휴식을 설정값(60초)의 두 배 넘게 부풀려 시간을 때우면 운동이 아니다
+  if (restMax > 120) failures.push(`시간을 휴식으로 때운다 — 동작 사이 휴식 최대 ${restMax}초`);
+  // 영상이 200개나 있는데 같은 동작을 반복할 이유가 없다
+  if (dupAvg > 0.5) failures.push(`같은 동작이 반복된다 — 시퀀스당 평균 ${dupAvg.toFixed(2)}개`);
+  // 코어로 메우는지 확인. 코어를 안 쓰면 30% 아래로 떨어진다
+  if (corePct < 30) failures.push(`코어로 시간을 메우지 않는다 — 본운동 중 코어 ${corePct.toFixed(0)}%`);
+
+  const ok = restMax <= 120 && dupAvg <= 0.5 && corePct >= 30;
+  console.log(`\n${ok ? '  OK' : 'FAIL'}  시간을 채우는 재료 — `
+    + `코어 ${corePct.toFixed(0)}% · 휴식 최대 ${restMax}초 · 중복 ${dupAvg.toFixed(2)}개`);
+}
+
 if (failures.length) {
   console.error('\n실패 ' + failures.length + '건:');
   for (const f of [...new Set(failures)].slice(0, 12)) console.error('  - ' + f);
