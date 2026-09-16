@@ -1730,6 +1730,7 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
           {customer?.name
             ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
             : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
+          <br />목표 시간은 최소값입니다. 모자라지 않게 맞추므로 조금 넘을 수 있습니다.
           <br />컨셉을 누르면 시퀀스가 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
         </div>
 

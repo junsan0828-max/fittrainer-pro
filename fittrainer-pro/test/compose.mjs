@@ -4,6 +4,12 @@
 // 아니라 영상 길이를 아직 못 읽은 상태였다. 조합기는 모르는 길이를 40초로
 // 가정하는데 재생 큐는 0 으로 세기 때문에, 계획은 45분인데 실제는 20분대였다.
 // 그 어긋남이 다시 생기면 여기서 걸린다.
+//
+// 지키는 약속은 둘이다.
+//   1. 실제 재생 시간은 목표보다 짧지 않다. 이건 예외가 없다.
+//      넘치면 트레이너가 건너뛰면 되지만, 모자라면 수업 중에 채울 수 없다.
+//   2. 넘치더라도 목표 + 10분 안이다. 영상이 길면(150초짜리를 3세트 하면
+//      한 동작에 9분이 넘는다) 마지막 한 동작 때문에 구조적으로 넘칠 수 있다.
 
 import { composeProgram, CONCEPT_MAP } from '../renderer/src/composeProgram.js';
 
@@ -39,6 +45,8 @@ const CASES = [
   ['긴 영상 90~150초',  lib(200, i => 90 + (i % 61))],
   ['뒤섞인 길이',       lib(200, i => [18, 35, 52, 88, 140][i % 5])],
   ['영상 수 부족 24개', lib(24,  i => 40 + (i % 21))],
+  // 풀이 바닥나 쓰던 동작을 다시 돌려야만 목표를 채울 수 있는 경우
+  ['라이브러리 8개뿐',  lib(8,   i => 30 + (i % 7))],
 ];
 
 const TARGETS = [30, 45, 60];
@@ -62,10 +70,14 @@ for (const [label, clips] of CASES) {
         }
       }
     }
-    const lo = target * 60, hi = (target + 5) * 60;
+    const lo = target * 60, hi = (target + 10) * 60;
+    if (worst < lo)
+      failures.push(`${label} / 목표 ${target}분: 목표보다 짧다 — 최소 ${fmt(worst)}`);
+    if (over > hi)
+      failures.push(`${label} / 목표 ${target}분: 너무 넘친다 — 최대 ${fmt(over)} (허용 ${target + 10}분)`);
     const ok = worst >= lo && over <= hi;
-    if (!ok) failures.push(`${label} / 목표 ${target}분: 최소 ${fmt(worst)}, 최대 ${fmt(over)} (허용 ${target}~${target + 5}분)`);
-    console.log(`${ok ? '  OK' : 'FAIL'}  ${label.padEnd(18)} 목표 ${target}분 → ${fmt(worst)} ~ ${fmt(over)}`);
+    console.log(`${ok ? '  OK' : 'FAIL'}  ${label.padEnd(18)} 목표 ${target}분 → ${fmt(worst)} ~ ${fmt(over)}`
+      + `  (+${((over - lo) / 60).toFixed(1)}분까지)`);
   }
 }
 

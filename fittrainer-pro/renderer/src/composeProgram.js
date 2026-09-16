@@ -269,50 +269,73 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   ].slice(0, coolCount);
 
   // ---- 목표 시간에 맞춘다 ----
-  // 개수만 맞추면 영상 길이가 제각각이라 실제 소요 시간이 크게 어긋난다.
-  // 남은 클립을 더 넣거나 덜어내서 목표 구간 안으로 들여놓는다.
+  // 목표는 하한선이다. 넘치는 건 트레이너가 건너뛰면 그만이지만, 모자라면
+  // 수업 중에 채울 방법이 없다. 그래서 어떤 경우에도 목표 아래로는 내려가지 않는다.
+  // softMax 는 되도록 지키는 선일 뿐 하한선을 이기지 못한다.
   const targetSec = dur * 60;
-  const maxSec = targetSec + 5 * 60;   // 45분 목표면 45~50분
+  const softMax = targetSec + 5 * 60;   // 45분 목표면 45~50분을 노린다
   const restBetweenSets = intSettings.rest;
   let restAfter = intSettings.restAfter;
   const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter);
+  const cost = c => blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter);
 
-  // 모자라면 남은 풀에서 본운동을 더 채운다
+  // 모자라면 남은 풀에서 본운동을 더 채운다. 여기서는 softMax 를 지킨다.
   const fillOrder = [queues.str, queues.core, queues.car, queues.warm, queues.cool];
   let guard = 0;
-  while (now() < targetSec && guard++ < 200) {
-    const src = fillOrder.find(q => q.length > 0);
-    if (!src) break;
-    const next = src.shift();
-    if (now() + blockSeconds(next, 'main', mainSets, restBetweenSets, restAfter) > maxSec) {
-      // 이걸 넣으면 넘친다. 다른 짧은 클립이 있으면 계속, 없으면 멈춘다.
-      const shorter = fillOrder.find(q =>
-        q.some(c => now() + blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter) <= maxSec));
-      if (!shorter) break;
-      const idx = shorter.findIndex(c =>
-        now() + blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter) <= maxSec);
-      mainClips.push(...shorter.splice(idx, 1));
-      continue;
+  while (now() < targetSec && guard++ < 400) {
+    let picked = null;
+    for (const q of fillOrder) {
+      const idx = q.findIndex(c => now() + cost(c) <= softMax);
+      if (idx !== -1) { picked = q.splice(idx, 1)[0]; break; }
     }
-    mainClips.push(next);
+    if (!picked) break;
+    mainClips.push(picked);
   }
 
-  // 넘치면 본운동 뒤쪽부터 덜어낸다. 준비/정리운동은 건드리지 않는다.
-  while (now() > maxSec && mainClips.length > 1) mainClips.pop();
-
-  // 클립이 부족해 목표에 한참 못 미치면 세트를 늘려 채운다
-  while (now() < targetSec && mainSets < 6) {
-    const bumped = planSeconds(warmupClips, mainClips, coolClips, mainSets + 1, restBetweenSets, restAfter);
-    if (bumped > maxSec) break;
-    mainSets += 1;
+  // 넘치면 본운동 뒤쪽부터 덜어낸다. 단 목표 아래로 떨어뜨리면서까지 덜지는 않는다.
+  while (now() > softMax && mainClips.length > 1) {
+    const without = planSeconds(
+      warmupClips, mainClips.slice(0, -1), coolClips, mainSets, restBetweenSets, restAfter);
+    if (without < targetSec) break;
+    mainClips.pop();
   }
 
-  // 영상이 길면 하나를 더 넣는 순간 넘쳐서, 목표에 조금 못 미친 채 끝나곤 한다.
-  // 남은 만큼 동작 사이 휴식을 늘려 목표 시간을 채운다. 최소 시간은 지켜야 한다.
+  // 여기서부터는 목표를 채우는 수단들이다. 초과폭이 작은 것부터 쓴다.
+  // 휴식 늘리기가 가장 잘게 조절되므로 먼저 쓰고, 그래도 모자랄 때 세트와
+  // 클립을 건드린다. 어느 경우에도 목표 아래로는 끝내지 않는다.
   if (now() < targetSec && mainClips.length > 0) {
-    const gap = targetSec - now();
-    const add = Math.ceil(gap / mainClips.length);
+    const add = Math.ceil((targetSec - now()) / mainClips.length);
     restAfter = Math.min(restAfter + add, 180);
+  }
+
+  // 클립이 부족하면 세트를 늘린다
+  while (now() < targetSec && mainSets < 6) mainSets += 1;
+
+  // 세트를 늘렸다면 휴식으로 다시 미세 조정할 여지가 생긴다
+  if (now() < targetSec && mainClips.length > 0) {
+    const add = Math.ceil((targetSec - now()) / mainClips.length);
+    restAfter = Math.min(restAfter + add, 180);
+  }
+
+  // 그래도 모자라면 남은 클립을 짧은 것부터 넣는다. 넘어도 좋다.
+  guard = 0;
+  while (now() < targetSec && guard++ < 400) {
+    let best = null, bestQ = null, bestIdx = -1;
+    for (const q of fillOrder) {
+      q.forEach((c, i2) => {
+        if (!best || cost(c) < cost(best)) { best = c; bestQ = q; bestIdx = i2; }
+      });
+    }
+    if (!best) break;
+    mainClips.push(bestQ.splice(bestIdx, 1)[0]);
+  }
+
+  // 라이브러리가 너무 작아 풀이 비었다면 쓰던 동작을 한 번 더 돌린다.
+  // 같은 동작이 반복되더라도 목표 시간을 채우는 쪽을 택한다.
+  if (now() < targetSec && mainClips.length > 0) {
+    const cycle = [...mainClips];
+    let i2 = 0, repeatGuard = 0;
+    while (now() < targetSec && repeatGuard++ < 400) mainClips.push(cycle[i2++ % cycle.length]);
   }
 
   mainClips = avoidConsecutiveSamePart(mainClips);
