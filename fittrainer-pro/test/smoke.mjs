@@ -113,7 +113,7 @@ await page.goto(base, { waitUntil: 'networkidle' });
 const rendered = await page.evaluate(() => document.getElementById('root')?.children.length ?? 0);
 if (rendered === 0) failures.push('root 가 비어 있습니다 — 화면이 렌더되지 않았습니다');
 
-const TABS = ['라이브러리', '고객', '세션 설정', '프로그램 빌더', '연속 재생', '재생', '기록', '설정'];
+const TABS = ['라이브러리', '고객', '시퀀스 설정', '시퀀스 빌더', '시퀀스 목록', '재생', '기록', '설정'];
 for (const label of TABS) {
   const before = failures.length;
   try {

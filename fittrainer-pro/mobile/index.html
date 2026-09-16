@@ -122,7 +122,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
   .tabs{justify-content:center;gap:8px}
   .tabs button{flex:0 0 132px}
 
-  /* 리모컨: 왼쪽 조작, 오른쪽 프로그램 */
+  /* 리모컨: 왼쪽 조작, 오른쪽 시퀀스 */
   #sc-remote{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
     gap:24px;align-items:start}
   #sc-remote .pane{min-width:0}
@@ -232,7 +232,7 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
 
   <div class="q">
     <div class="q-head">
-      <span>프로그램</span>
+      <span>시퀀스</span>
       <button id="edit-toggle">편집</button>
     </div>
     <div id="list"></div>
@@ -255,11 +255,11 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
     </div>
   </div>
 
-  <!-- 세션 설정 -->
+  <!-- 시퀀스 설정 -->
   <div class="screen" id="sc-session" hidden>
-    <div class="sec">프로그램 만들기</div>
+    <div class="sec">시퀀스 만들기</div>
     <div class="chips" style="padding:0 16px 14px" id="concepts"></div>
-    <div class="sec">만들어진 프로그램</div>
+    <div class="sec">만들어진 시퀀스</div>
     <div id="prog-list"></div>
     <div class="sec">대상 고객</div>
     <div class="card" id="sess-cust"><div class="nm"><b>—</b><small>고객 탭에서 선택하세요</small></div></div>
@@ -273,9 +273,9 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
     </div>
   </div>
 
-  <!-- 프로그램 빌더 -->
+  <!-- 시퀀스 빌더 -->
   <div class="screen" id="sc-builder" hidden>
-    <div class="sec" id="bl-count">프로그램</div>
+    <div class="sec" id="bl-count">시퀀스</div>
     <div id="bl-list"></div>
     <div class="ctl" style="padding-top:8px">
       <button class="b" id="bl-clear">전체 비우기</button>
@@ -305,9 +305,9 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
   <button data-sc="customer">
     <svg viewBox="0 0 24 24"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-5 0-9 2.5-9 5.5V22h18v-2.5c0-3-4-5.5-9-5.5z"/></svg>고객</button>
   <button data-sc="session">
-    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 10.6V6h-2v7.4l5.2 3.1 1-1.7-4.2-2.2z"/></svg>세션</button>
+    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 10.6V6h-2v7.4l5.2 3.1 1-1.7-4.2-2.2z"/></svg>시퀀스 설정</button>
   <button data-sc="builder">
-    <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h12v2H3z"/></svg>프로그램</button>
+    <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3zm0 6h18v2H3zm0 6h12v2H3z"/></svg>시퀀스 빌더</button>
   <button data-sc="settings">
     <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 4-2.1-1.6a7 7 0 0 0-.5-1.2l.4-2.6-2.1-1.2-2.1 1.6a7 7 0 0 0-1.3-.4L12.5 4h-2.4L9.3 6.6a7 7 0 0 0-1.3.4L5.9 5.4 3.8 6.6l.4 2.6a7 7 0 0 0-.5 1.2L1.6 12l2.1 1.6c.1.4.3.8.5 1.2l-.4 2.6 2.1 1.2 2.1-1.6c.4.2.9.3 1.3.4l.8 2.6h2.4l.8-2.6c.4-.1.9-.2 1.3-.4l2.1 1.6 2.1-1.2-.4-2.6c.2-.4.4-.8.5-1.2L21 12z"/></svg>설정</button>
 </div>
@@ -574,7 +574,7 @@ function resetDraft() {
   renderCustomers(lastState || {});
 }
 
-/* ---------- 세션 설정 ---------- */
+/* ---------- 시퀀스 설정 ---------- */
 function renderSession(s) {
   renderPrograms(s);
   const cfg = s.sessionCfg || {};
@@ -593,7 +593,7 @@ function renderSession(s) {
 }
 $('sf-gen').onclick = () => { send('session-generate'); toast('조합 중...'); };
 
-/* ---------- 프로그램 만들기 / 목록 ---------- */
+/* ---------- 시퀀스 만들기 / 목록 ---------- */
 function renderPrograms(s) {
   $('concepts').innerHTML = CONCEPTS
     .map(([code, label]) => `<button data-concept="${code}">+ ${label}</button>`).join('');
@@ -604,14 +604,14 @@ function renderPrograms(s) {
         <div class="nm"><b>${x.name}</b><small>${x.count}개 동작 · ${human(x.seconds)}</small></div>
         <button class="icon-btn" data-play-session="${x.id}">▶</button>
       </div>`).join('')
-    : '<div class="empty">아직 만들어진 프로그램이 없습니다.<br>위에서 컨셉을 눌러 보세요.</div>';
+    : '<div class="empty">아직 만들어진 시퀀스이 없습니다.<br>위에서 컨셉을 눌러 보세요.</div>';
 }
 
 $('sc-session').addEventListener('click', e => {
   const gen = e.target.closest('[data-concept]');
   if (gen) {
     send('generate-concept', { concept: gen.dataset.concept });
-    toast('프로그램을 만드는 중...');
+    toast('시퀀스을 만드는 중...');
     return;
   }
   const play = e.target.closest('[data-play-session]');
@@ -636,11 +636,11 @@ $('prog-list').addEventListener('click', e => {
   }
 });
 
-/* ---------- 프로그램 빌더 ---------- */
+/* ---------- 시퀀스 빌더 ---------- */
 function renderBuilder(s) {
   const blocks = s.blocks || [];
   const PHASE = { warmup: '준비', main: '본운동', cooldown: '정리' };
-  $('bl-count').textContent = `프로그램 · ${blocks.length}개 동작`
+  $('bl-count').textContent = `시퀀스 · ${blocks.length}개 동작`
     + (s.totalSeconds ? ` · 약 ${human(s.totalSeconds)}` : '');
   $('bl-list').innerHTML = blocks.length ? blocks.map((b, i) => {
     const c = b.clip || {};
@@ -661,7 +661,7 @@ function renderBuilder(s) {
         <button class="icon-btn danger" data-act="del">✕</button>
       </div>
     </div>`;
-  }).join('') : '<div class="empty">동작이 없습니다.<br>아래 라이브러리에서 추가하거나<br>세션 탭에서 자동 조합하세요.</div>';
+  }).join('') : '<div class="empty">동작이 없습니다.<br>아래 라이브러리에서 추가하거나<br>시퀀스 탭에서 자동 조합하세요.</div>';
 
   const clips = s.clips || [];
   const f = libFilter.trim().toLowerCase();
@@ -695,7 +695,7 @@ $('bl-lib').onclick = e => {
 };
 $('bl-search').oninput = e => { libFilter = e.target.value; renderBuilder(lastState || {}); };
 $('bl-clear').onclick = () => {
-  if (confirm('프로그램을 전부 비울까요?')) send('blocks-clear');
+  if (confirm('시퀀스을 전부 비울까요?')) send('blocks-clear');
 };
 
 // 매초 오는 tick 으로 시간 표시만 갱신한다. 목록은 다시 그리지 않는다.
@@ -715,7 +715,7 @@ function renderTime() {
   if (!el) return;
   if (!total) { el.innerHTML = ''; return; }
   el.innerHTML =
-    `<span>세션 <b>${mmss(tick.elapsedSeconds)}</b> / ${mmss(total)}</span>`
+    `<span>시퀀스 <b>${mmss(tick.elapsedSeconds)}</b> / ${mmss(total)}</span>`
     + `<span class="left">남은 ${human(tick.remainingSeconds)}</span>`
     + (cur?.type === 'clip' && tick.duration
         ? `<span>이 동작 ${mmss(tick.progress)} / ${mmss(tick.duration)}</span>` : '');
@@ -911,10 +911,10 @@ function render(s) {
       + (c.reps ? `<span>${c.reps}회</span>` : '')
       + (cur.totalSets > 1 ? `<span>세트 ${cur.setNum}/${cur.totalSets}</span>` : '');
   } else if (cur?.type === 'break') {
-    $('now-lab').textContent = '세션 간 휴식';
+    $('now-lab').textContent = '시퀀스 간 휴식';
     $('now-title').textContent = mmss(tick.restCountdown ?? cur.duration);
     $('now-meta').innerHTML =
-      `<span>${cur.sessionName || '세션'} 완료</span>`
+      `<span>${cur.sessionName || '시퀀스'} 완료</span>`
       + `<span class="chip" style="background:#22C55E22;color:#22C55E">다음 · ${cur.nextName || ''}</span>`;
   } else if (cur?.type === 'rest') {
     $('now-lab').textContent = cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식';
@@ -943,7 +943,7 @@ function render(s) {
 
   if (q.length === 0) {
     $('list').innerHTML =
-      '<div class="empty">재생 중인 프로그램이 없습니다.<br>PC 에서 프로그램을 먼저 만들어 주세요.</div>';
+      '<div class="empty">재생 중인 시퀀스이 없습니다.<br>PC 에서 시퀀스을 먼저 만들어 주세요.</div>';
     return;
   }
 
@@ -951,7 +951,7 @@ function render(s) {
     const cls = i === ci ? 'active' : i < ci ? 'done' : '';
     if (it.type === 'break') {
       return `<div class="item brk ${cls}" data-i="${i}"><span class="idx">◆</span>
-        <span class="nm">세션 간 휴식 ${human(it.duration)} · 다음 ${it.nextName || ''}</span></div>`;
+        <span class="nm">시퀀스 간 휴식 ${human(it.duration)} · 다음 ${it.nextName || ''}</span></div>`;
     }
     if (it.type === 'rest') {
       return `<div class="item rest ${cls}" data-i="${i}"><span class="idx">·</span>

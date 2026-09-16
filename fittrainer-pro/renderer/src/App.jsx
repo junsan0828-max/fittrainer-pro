@@ -142,7 +142,7 @@ function Icon({ name, size = 20 }) {
 }
 
 // 로컬 영상 파일 경로를 file:// URL 로 변환.
-// 저장된 프로그램에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
+// 저장된 시퀀스에 남아있는 옛 http://localhost:3737 URL 도 filePath 로 다시 만든다.
 // 파일명 맨 앞의 영문 토큰을 분류 접두어로 본다.
 // "AE 팔벌려뛰기(외발). 전신. 020.mp4" -> "AE",  "STR_하체_스쿼트_12.mp4" -> "STR"
 function filePrefix(fileName) {
@@ -270,9 +270,9 @@ function TabBar({ tab, setTab, alert }) {
   const tabs = [
     { id: 'library', label: '라이브러리' },
     { id: 'customers', label: '고객' },
-    { id: 'session', label: '세션 설정' },
-    { id: 'builder', label: '프로그램 빌더' },
-    { id: 'queue', label: '연속 재생' },
+    { id: 'session', label: '시퀀스 설정' },
+    { id: 'builder', label: '시퀀스 빌더' },
+    { id: 'queue', label: '시퀀스 목록' },
     { id: 'player', label: '재생' },
     { id: 'history', label: '기록' },
     { id: 'settings', label: '설정' },
@@ -802,7 +802,7 @@ function CustomersTab({ customers, setCustomers, setTab, setActiveCustomer, setS
                 </div>
               )}
             </div>
-            <button onClick={()=>startSession(c)} style={{padding:'6px 14px',background:T.accent,color:'#fff',borderRadius:6,fontSize:12,fontWeight:600}}>세션 시작</button>
+            <button onClick={()=>startSession(c)} style={{padding:'6px 14px',background:T.accent,color:'#fff',borderRadius:6,fontSize:12,fontWeight:600}}>시퀀스 시작</button>
             <button onClick={()=>edit(c)} style={{padding:'6px 14px',background:T.panel,color:T.text,borderRadius:6,fontSize:12,border:`1px solid ${T.border}`}}>수정</button>
             <button onClick={()=>remove(c.id)} style={{padding:'6px 14px',background:'transparent',color:'#E84040',borderRadius:6,fontSize:12,border:`1px solid #E8404044`}}>삭제</button>
           </div>
@@ -817,7 +817,7 @@ function CustomersTab({ customers, setCustomers, setTab, setActiveCustomer, setS
   );
 }
 
-// 폰으로 세션을 조작하기 위한 접속 정보. QR 을 찍으면 바로 리모컨이 열린다.
+// 폰으로 시퀀스를 조작하기 위한 접속 정보. QR 을 찍으면 바로 리모컨이 열린다.
 function RemotePanel({ embedded }) {
   const [info, setInfo] = useState(null);
   const [pinDraft, setPinDraft] = useState('');
@@ -972,7 +972,7 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
 
   return (
     <div style={{ padding: 24, maxWidth: 700, margin: '0 auto', overflowY: 'auto', height: '100%' }}>
-      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>세션 설정</div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>시퀀스 설정</div>
       {customer && (
         <div style={{ fontSize: 13, color: T.dim, marginBottom: 12, background: T.surface, padding: '8px 12px', borderRadius: 6, border: `1px solid ${T.border}` }}>
           <span style={{ color: T.text, fontWeight: 600 }}>{customer.name}</span>
@@ -1136,7 +1136,7 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '10px 16px', display: 'flex', gap: 8, borderBottom: `1px solid ${T.border}`, alignItems: 'center' }}>
-          <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>프로그램 빌더</span>
+          <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>시퀀스 빌더</span>
           <button onClick={() => { if (blocks.length > 0) setTab('player'); }} style={{
             padding: '7px 16px', background: blocks.length > 0 ? T.accent : T.dimMid,
             color: '#fff', borderRadius: 6, fontSize: 13, fontWeight: 600,
@@ -1301,15 +1301,15 @@ function expandToQueue(blocks, sessionName) {
   return q;
 }
 
-// 여러 세션을 하나의 큐로 잇는다.
-// 세션과 세션 사이에는 'break' 항목이 들어가고, 그게 끝나면 다음 세션이 이어서 재생된다.
+// 여러 시퀀스을 하나의 큐로 잇는다.
+// 시퀀스과 시퀀스 사이에는 'break' 항목이 들어가고, 그게 끝나면 다음 시퀀스이 이어서 재생된다.
 function expandPlaylist(entries) {
   const q = [];
   entries.forEach((entry, i) => {
     const part = expandToQueue(entry.blocks || [], entry.name);
     if (part.length === 0) return;
 
-    // 마지막 동작 뒤의 전환 휴식은 세션 사이 휴식과 겹치므로 뺀다
+    // 마지막 동작 뒤의 전환 휴식은 시퀀스 사이 휴식과 겹치므로 뺀다
     const isLastOfSession = i < entries.length - 1;
     if (isLastOfSession && part[part.length - 1]?.type === 'rest') part.pop();
 
@@ -1414,12 +1414,12 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
         <SetGroup title="확인이 필요합니다">
           <div style={{ padding: '14px 16px' }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: '#F87171' }}>
-              프로그램에 들어 있는 영상 {missing.length}개를 폴더에서 찾을 수 없습니다
+              시퀀스에 들어 있는 영상 {missing.length}개를 폴더에서 찾을 수 없습니다
             </div>
             <div style={{ fontSize: 12, color: T.dim, marginTop: 5, lineHeight: 1.6 }}>
               파일을 지웠거나 다른 곳으로 옮긴 것 같습니다. 그대로 두면 재생 중에 멈춥니다.
               원본을 되돌려 놓고 <b style={{ color: T.text }}>다시 읽기</b> 를 누르거나,
-              아래에서 프로그램에서 걷어내세요.
+              아래에서 시퀀스에서 걷어내세요.
             </div>
 
             <div style={{ marginTop: 10, maxHeight: 190, overflowY: 'auto' }}>
@@ -1442,12 +1442,12 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
             </div>
 
             <button onClick={() => {
-              if (!confirm(`영상 ${missing.length}개를 프로그램에서 걷어낼까요?\n원본 파일은 건드리지 않습니다.`)) return;
+              if (!confirm(`영상 ${missing.length}개를 시퀀스에서 걷어낼까요?\n원본 파일은 건드리지 않습니다.`)) return;
               onRemoveMissing();
             }} style={{
               marginTop: 10, padding: '8px 16px', borderRadius: 6, fontSize: 12,
               fontWeight: 600, background: '#F87171', color: '#fff',
-            }}>프로그램에서 걷어내기</button>
+            }}>시퀀스에서 걷어내기</button>
           </div>
         </SetGroup>
       )}
@@ -1460,7 +1460,7 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
 
       <SetGroup title="영상 변환">
         <Row title="자동으로 미리 변환"
-          desc="재생할 수 없는 형식(H.265 등)을 앱이 켜져 있을 때 미리 바꿔 둡니다. 세션 중에 기다리지 않아도 됩니다.">
+          desc="재생할 수 없는 형식(H.265 등)을 앱이 켜져 있을 때 미리 바꿔 둡니다. 재생 중에 기다리지 않아도 됩니다.">
           <Toggle on={!!autoConvert} onChange={onToggleAutoConvert} />
         </Row>
         <Row title="변환이 필요한 영상"
@@ -1498,7 +1498,7 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
       </SetGroup>
 
       <SetGroup title="데이터">
-        <Row title="저장된 프로그램" desc="연속 재생 탭에서 만듭니다">
+        <Row title="저장된 시퀀스" desc="시퀀스 목록 탭에서 만듭니다">
           <span style={{ fontSize: 13, color: T.dim }}>{sessions.length}개</span>
         </Row>
         <Row title="재생 기록" desc="최근 500건까지 남습니다">
@@ -1518,7 +1518,7 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
   );
 }
 
-// 세션을 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
+// 시퀀스을 실제로 진행한 기록. 언제 누구와 무엇을 얼마나 했는지 남긴다.
 function HistoryTab({ history, setHistory, customers }) {
   const [who, setWho] = useState('');
 
@@ -1568,7 +1568,7 @@ function HistoryTab({ history, setHistory, customers }) {
 
       {shown.length > 0 && (
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[['진행한 세션', `${stats.count}회`],
+          {[['진행한 시퀀스', `${stats.count}회`],
             ['총 운동 시간', humanTime(stats.seconds)],
             ['수행한 동작', `${stats.clips}개`]].map(([k, v]) => (
             <div key={k} style={{
@@ -1585,7 +1585,7 @@ function HistoryTab({ history, setHistory, customers }) {
       {shown.length === 0 ? (
         <div style={{ fontSize: 12, color: T.dim, padding: 30, textAlign: 'center', lineHeight: 1.8 }}>
           아직 기록이 없습니다.<br />
-          프로그램을 재생하면 자동으로 남습니다.
+          시퀀스을 재생하면 자동으로 남습니다.
         </div>
       ) : shown.map(h => {
         const pct = h.totalClips ? Math.round((h.doneClips / h.totalClips) * 100) : 0;
@@ -1596,7 +1596,7 @@ function HistoryTab({ history, setHistory, customers }) {
             background: T.surface, border: `1px solid ${T.border}`,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>{h.sessionName || '프로그램'}</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{h.sessionName || '시퀀스'}</span>
               {h.customerName && (
                 <span style={{
                   fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
@@ -1647,8 +1647,8 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
 
   function saveCurrent() {
     const label = name.trim();
-    if (!label) return alert('세션 이름을 입력하세요.');
-    if (blocks.length === 0) return alert('프로그램 빌더에 동작이 없습니다.');
+    if (!label) return alert('시퀀스 이름을 입력하세요.');
+    if (blocks.length === 0) return alert('시퀀스 빌더에 동작이 없습니다.');
     const ses = { id: uid(), name: label, blocks, savedAt: Date.now() };
     setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
     setName('');
@@ -1673,14 +1673,14 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
 
-        {/* 프로그램 만들기 + 목록 */}
+        {/* 시퀀스 만들기 + 목록 */}
         <div style={{ flex: 1, minWidth: 340 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>프로그램 만들기</div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>시퀀스 만들기</div>
           <div style={{ fontSize: 12, color: T.dim, marginBottom: 10, lineHeight: 1.6 }}>
             {customer?.name
               ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
               : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
-            <br />컨셉을 누르면 프로그램이 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
+            <br />컨셉을 누르면 시퀀스이 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 18 }}>
@@ -1693,13 +1693,13 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>만들어진 프로그램</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>만들어진 시퀀스</span>
             <span style={{ fontSize: 11, color: T.dim }}>더블클릭하면 바로 재생됩니다</span>
           </div>
 
           {sessions.length === 0 ? (
             <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
-              아직 만들어진 프로그램이 없습니다.<br />위에서 컨셉을 눌러 보세요.
+              아직 만들어진 시퀀스이 없습니다.<br />위에서 컨셉을 눌러 보세요.
             </div>
           ) : sessions.map(ses => {
             const secs = expandToQueue(ses.blocks).reduce((n, it) => n + itemSeconds(it), 0);
@@ -1774,7 +1774,7 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
           {entries.length === 0 ? (
             <div style={{ fontSize: 12, color: T.dim, padding: 20, textAlign: 'center', lineHeight: 1.7 }}>
               대기열이 비어 있습니다.<br />
-              왼쪽에서 세션을 추가하면 순서대로 이어서 재생됩니다.
+              왼쪽에서 시퀀스을 추가하면 순서대로 이어서 재생됩니다.
             </div>
           ) : (
             <>
@@ -1838,7 +1838,7 @@ function QueueTab({ sessions, setSessions, playlist, setPlaylist, blocks, setTab
               <button onClick={() => setTab('player')} style={{
                 width: '100%', marginTop: 14, padding: '12px 20px', borderRadius: 8,
                 background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
-              }}>대기열 재생 ({entries.length}개 세션 · {humanTime(totalSec)})</button>
+              }}>대기열 재생 ({entries.length}개 시퀀스 · {humanTime(totalSec)})</button>
             </>
           )}
         </div>
@@ -1872,7 +1872,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   const containerRef = useRef(null);
 
   useEffect(() => {
-    // 대기열이 짜여 있으면 세션들을 이어 붙이고, 아니면 현재 프로그램만 재생한다
+    // 대기열이 짜여 있으면 시퀀스들을 이어 붙이고, 아니면 현재 시퀀스만 재생한다
     const q = playlist?.length ? expandPlaylist(playlist) : expandToQueue(blocks);
     setQueue(q);
     setCi(0);
@@ -1961,7 +1961,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
     setPreviewFailed(false);
   }, [ci, cur?.type]);
 
-  // 휴식/세션 간 휴식 카운트다운. 일시정지하면 같이 멈춘다.
+  // 휴식/시퀀스 간 휴식 카운트다운. 일시정지하면 같이 멈춘다.
   useEffect(() => {
     if ((cur?.type !== 'rest' && cur?.type !== 'break') || !playing) return;
     restTimer.current = setInterval(() => {
@@ -1999,7 +1999,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
     setPlaying(true);
   }
 
-  // 휴식과 세션 간 휴식 모두 건너뛸 수 있어야 한다
+  // 휴식과 시퀀스 간 휴식 모두 건너뛸 수 있어야 한다
   function skipRest() {
     if (cur?.type === 'rest' || cur?.type === 'break') {
       clearInterval(restTimer.current);
@@ -2016,7 +2016,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
     }
   }
 
-  // 세션 중에는 마우스보다 키보드가 빠르다
+  // 재생 중에는 마우스보다 키보드가 빠르다
   useEffect(() => {
     function onKey(e) {
       const tag = e.target?.tagName;
@@ -2160,7 +2160,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   if (queue.length === 0) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: T.dim, fontSize: 14 }}>
-        프로그램 빌더에서 동작을 추가한 후 재생하세요
+        시퀀스 빌더에서 동작을 추가한 후 재생하세요
       </div>
     );
   }
@@ -2213,16 +2213,16 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
             <div style={{
               fontSize: 13, fontWeight: 600, letterSpacing: 2, color: '#22C55E',
               textTransform: 'uppercase', marginBottom: 10,
-            }}>세션 간 휴식</div>
+            }}>시퀀스 간 휴식</div>
             <div style={{
               fontSize: 108, fontWeight: 800, color: '#22C55E', lineHeight: 1,
               fontVariantNumeric: 'tabular-nums',
             }}>{mmss(restCountdown)}</div>
             <div style={{ fontSize: 14, color: T.dim, marginTop: 18 }}>
-              {cur.sessionName ? `${cur.sessionName} 완료` : '세션 완료'}
+              {cur.sessionName ? `${cur.sessionName} 완료` : '시퀀스 완료'}
             </div>
             <div style={{ fontSize: 20, fontWeight: 700, marginTop: 6 }}>
-              다음 · {cur.nextName || '다음 세션'}
+              다음 · {cur.nextName || '다음 시퀀스'}
             </div>
             <button onClick={skipRest} style={{
               marginTop: 28, padding: '12px 28px', borderRadius: 8,
@@ -2329,7 +2329,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
                 marginLeft: 4, borderLeft: '1px solid rgba(255,255,255,.18)',
                 fontVariantNumeric: 'tabular-nums',
               }}>
-                세션 {mmss(timing.elapsed)} / {mmss(timing.total)}
+                시퀀스 {mmss(timing.elapsed)} / {mmss(timing.total)}
                 <span style={{ color: '#A78BFA', marginLeft: 8 }}>
                   남은 {humanTime(timing.remaining)}
                 </span>
@@ -2426,14 +2426,14 @@ export default function App() {
   const [rawClips, setClips] = useState(() => loadLS('ft_clips', []));
   // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
-  // 저장된 세션과 재생 대기열
+  // 저장된 시퀀스과 재생 대기열
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
   const [history, setHistory] = useState(() => loadLS('ft_history', []));
   // 지금 진행 중인 기록의 id. 큐가 바뀌면 새 기록을 만든다.
   const runRef = useRef({ id: null, key: '' });
 
-  // 대기열에 담긴 세션들. 재생 탭이 이걸로 큐를 만든다.
+  // 대기열에 담긴 시퀀스들. 재생 탭이 이걸로 큐를 만든다.
   const playlistEntries = useMemo(
     () => playlist.map(p => {
       const ses = sessions.find(x => x.id === p.sessionId);
@@ -2472,7 +2472,7 @@ export default function App() {
   const [playbackMap, setPlaybackMap] = useState({});
   const [codec, setCodec] = useState({ state: 'idle', unsupported: [], progress: null });
   // 재생 불가 영상은 앱을 켜둔 동안 알아서 미리 변환해 둔다.
-  // 세션 중에 변환을 기다리는 일이 없어야 한다.
+  // 재생 중에 변환을 기다리는 일이 없어야 한다.
   const [autoConvert, setAutoConvert] = useState(() => loadLS('ft_auto_convert', true));
 
   // 앱 전반 설정. 설정 탭과 폰에서 함께 고친다.
@@ -2537,7 +2537,7 @@ export default function App() {
 
   // ---------------------------------------------------------------
   // 폰 원격 조작
-  // 재생뿐 아니라 고객·세션 설정·프로그램 구성까지 폰에서 다룰 수 있도록
+  // 재생뿐 아니라 고객·시퀀스 설정·구성까지 폰에서 다룰 수 있도록
   // 앱 상태를 통째로 내보내고, 들어온 명령을 여기서 처리한다.
   // ---------------------------------------------------------------
   const [playerState, setPlayerState] = useState({ playing: false, queue: [], currentIndex: 0, speed: 1 });
@@ -2696,7 +2696,7 @@ export default function App() {
     saveData('ft_clips', result.clips);
   }
 
-  // 프로그램이 참조하는 영상 중 폴더에서 사라진 것을 찾는다.
+  // 시퀀스이 참조하는 영상 중 폴더에서 사라진 것을 찾는다.
   // 재생 도중에야 오류로 알게 되는 일이 없도록 미리 알려준다.
   const missing = useMemo(() => {
     if (clips.length === 0) return [];   // 아직 안 읽었으면 판단할 수 없다
@@ -2712,7 +2712,7 @@ export default function App() {
         found.set(fp, e);
       }
     };
-    scan(blocks, '프로그램 빌더');
+    scan(blocks, '시퀀스 빌더');
     for (const ses of sessions) scan(ses.blocks, ses.name);
 
     return [...found.entries()].map(([filePath, v]) =>
@@ -2721,7 +2721,7 @@ export default function App() {
 
   const missingPathSet = useMemo(() => new Set(missing.map(m => m.filePath)), [missing]);
 
-  // 사라진 영상을 프로그램에서 걷어낸다
+  // 사라진 영상을 시퀀스에서 걷어낸다
   function removeMissing() {
     const gone = new Set(missing.map(m => m.filePath));
     const clean = list => (list || []).filter(b => !gone.has(b.clip?.filePath));
@@ -2752,7 +2752,7 @@ export default function App() {
         runRef.current = { id: uid(), key };
         next = [...prev, {
           id: runRef.current.id,
-          sessionName: p.sessionName || '프로그램',
+          sessionName: p.sessionName || '시퀀스',
           customerName: activeCustomer?.name || '',
           startedAt: Date.now(),
           totalClips: p.totalClips,
@@ -2773,7 +2773,7 @@ export default function App() {
     });
   }
 
-  // 컨셉을 누르면 그 자리에서 프로그램을 만들어 목록에 넣는다.
+  // 컨셉을 누르면 그 자리에서 시퀀스을 만들어 목록에 넣는다.
   // 같은 컨셉을 다시 눌러도 클립 풀을 매번 섞으므로 다른 구성이 나온다.
   function generateConcept(code) {
     const con = CONCEPT_MAP[code];
@@ -2814,7 +2814,7 @@ export default function App() {
     return ses;
   }
 
-  // 만들어진 프로그램을 바로 재생한다
+  // 만들어진 시퀀스을 바로 재생한다
   function playSession(id) {
     if (!sessions.some(x => x.id === id)) return;
     const next = [{ sessionId: id, breakAfter: 0 }];
@@ -2910,7 +2910,7 @@ export default function App() {
     const api = window.electronAPI;
     if (!api) return;
 
-    // 데이터 파일에서 고객/프로그램 복원
+    // 데이터 파일에서 고객/시퀀스 복원
     if (api.loadData) {
       Promise.all([
         api.loadData('ft_customers'),

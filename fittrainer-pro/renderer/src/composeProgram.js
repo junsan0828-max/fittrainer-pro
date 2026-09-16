@@ -1,4 +1,4 @@
-// 운동 프로그램 조합 로직 — App.jsx(SessionTab)와 데모/테스트 스크립트가 공유하는 순수 함수 모듈.
+// 운동 시퀀스 조합 로직 — App.jsx(SessionTab)와 데모/테스트 스크립트가 공유하는 순수 함수 모듈.
 // React에 의존하지 않아 Node에서도 그대로 import해서 실행/검증할 수 있다.
 //
 // 2026-08-26 개선 배경: 기존 로직은 "준비운동 → 본운동 → 정리운동"이 항상 고정 순서였고,
@@ -32,7 +32,7 @@ export const TRAINING_METHODS = [
   { code: 'superset', label: '슈퍼세트 — 부위 다른 근력 클립 페어 연속' },
 ];
 
-// 프로그램 컨셉. 고르면 카테고리·집중 부위·구성 기법이 한 번에 잡힌다.
+// 시퀀스 컨셉. 고르면 카테고리·집중 부위·구성 기법이 한 번에 잡힌다.
 // 준비/정리운동 재료(CFR·CFS·MOV·STT)는 어느 컨셉에나 들어가야 구성이 완성된다.
 export const CONCEPTS = [
   { code: 'full_strength', label: '전신 근력',
@@ -201,7 +201,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
       if (!queues.str.length && !queues.core.length && !queues.car.length) break;
     }
   } else if (method === 'interleave') {
-    // 복합교차형(요청 핵심): 유산소·회복 계열을 준비/정리운동에만 가두지 않고 세션 전체에
+    // 복합교차형(요청 핵심): 유산소·회복 계열을 준비/정리운동에만 가두지 않고 시퀀스 전체에
     // 흩뿌린다 — "유산소 > 폼롤링 > 유산소 > 스트레칭" 식으로 전환 자체가 자극이 되게.
     // 패턴: 근력/코어 1개당 유산소·회복(CFR/STT 교대) 1개를 붙인다.
     let recoveryToggle = 0;
@@ -346,7 +346,7 @@ function buildRationale({ method, customer, sessionCfg, targetCount, mainSets, i
     block: `${name}님은 경력·강도 조건상 근력→코어→유산소 순서로 예측 가능하게 진행하는 게 안전합니다. 동작 전환에 인지 부담을 주지 않고 폼에 집중시킬 수 있습니다.`,
     circuit: `근력·코어·유산소를 라운드 단위로 반복해 심박수를 계속 흔들면서도(체지방 감량 목표에 부합) 근력 부위가 매 라운드 바뀌어 국소 피로 누적을 줄입니다.`,
     interleave: `${name}님은 강도를 높이고 싶어하는 경력자라 근력/코어 사이사이에 유산소·폼롤링·스트레칭을 끼워 넣었습니다. 전환 동작 자체(서서↔바닥, 유산소↔회복)가 운동이 되면서 단조로움 없이 심박수·가동성·근력을 동시에 자극합니다.`,
-    superset: `${name}님 레벨에서는 서로 다른 부위 근력 클립을 페어로 묶어 휴식 없이 연속 수행시켜 세션 밀도를 높였습니다. 페어 사이에만 휴식을 둬 전체 시간 대비 실제 운동시간 비율(운동 밀도)을 극대화합니다.`,
+    superset: `${name}님 레벨에서는 서로 다른 부위 근력 클립을 페어로 묶어 휴식 없이 연속 수행시켜 시퀀스 밀도를 높였습니다. 페어 사이에만 휴식을 둬 전체 시간 대비 실제 운동시간 비율(운동 밀도)을 극대화합니다.`,
   }[method] || '';
 
   const mins = Math.round((estimatedSeconds || 0) / 60);
