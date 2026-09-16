@@ -11,7 +11,7 @@
 //   2. 넘치더라도 목표 + 10분 안이다. 영상이 길면(150초짜리를 3세트 하면
 //      한 동작에 9분이 넘는다) 마지막 한 동작 때문에 구조적으로 넘칠 수 있다.
 
-import { composeProgram, CONCEPT_MAP } from '../renderer/src/composeProgram.js';
+import { composeProgram, CONCEPT_MAP, restAfterFor } from '../renderer/src/composeProgram.js';
 
 // 재생 큐가 실제로 쓰는 계산. App.jsx 의 expandToQueue + itemSeconds 와 같은 규칙이다.
 function actualSeconds(blocks) {
@@ -25,7 +25,8 @@ function toBlocks(r) {
     clip, phase,
     sets: phase === 'main' ? r.mainSets : 1,
     restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-    restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : r.restAfter,
+    restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
+      : restAfterFor(clip, r.restAfter, r.restScale),
   }));
   return [...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown')];
 }

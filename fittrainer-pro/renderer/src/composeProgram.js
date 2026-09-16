@@ -50,6 +50,29 @@ export const CONCEPTS = [
 ];
 export const CONCEPT_MAP = Object.fromEntries(CONCEPTS.map(c => [c.code, c]));
 
+// 동작 뒤 휴식은 종류마다 달라야 한다.
+// 무거운 근력 뒤에는 길게 쉬어야 하지만, 코어나 스트레칭 뒤에 같은 시간을 쉬면
+// 수업이 늘어진다. 강도 설정에서 나온 기준 휴식에 이 배수를 곱해 쓴다.
+// 세트 사이 휴식은 같은 동작을 반복하는 사이라 배수를 적용하지 않는다.
+export const REST_SCALE_DEFAULT = {
+  STR: 1,     // 근력
+  MOV: 0.7,   // 움직임
+  CCS: 0.6,   // 코어스트렝스
+  CCB: 0.6,   // 코어밸런스
+  CAR: 0.5,   // 유산소
+  CFR: 0.35,  // 폼롤링
+  CFS: 0.35,  // 폼롤러스트레칭
+  STT: 0.3,   // 스트레칭
+  TMR: 0.5,   // 타이머
+};
+
+// 배수를 곱한 실제 휴식(초). 너무 짧으면 전환할 틈이 없으니 5초는 남긴다.
+export function restAfterFor(clip, baseRestAfter, scale) {
+  if (!(baseRestAfter > 0)) return 0;
+  const m = (scale || REST_SCALE_DEFAULT)[clip?.code];
+  return Math.max(5, Math.round(baseRestAfter * (m == null ? 1 : m)));
+}
+
 // 영상 길이를 아직 못 읽은 클립의 대체값(초).
 // 라이브러리를 한 번 훑고 나면 실제 길이가 들어와 정확해진다.
 const FALLBACK_CLIP_SEC = 40;
@@ -57,16 +80,18 @@ const FALLBACK_CLIP_SEC = 40;
 const clipSec = c => (c?.duration > 0 ? c.duration : FALLBACK_CLIP_SEC);
 
 // 블록 하나가 실제로 잡아먹는 시간. 재생 큐를 만드는 규칙과 같아야 한다.
-export function blockSeconds(clip, phase, mainSets, restBetweenSets, restAfter) {
+export function blockSeconds(clip, phase, mainSets, restBetweenSets, restAfter, scale) {
   const sets = phase === 'main' ? mainSets : 1;
   const between = phase === 'main' ? restBetweenSets : 10;
-  const after = phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : restAfter;
+  const after = phase === 'warmup' ? 10
+    : phase === 'cooldown' ? 15
+    : restAfterFor(clip, restAfter, scale);
   return clipSec(clip) * sets + between * (sets - 1) + after;
 }
 
-function planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter) {
+function planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter, scale) {
   const sum = (list, phase) => list.reduce(
-    (n, c) => n + blockSeconds(c, phase, mainSets, restBetweenSets, restAfter), 0);
+    (n, c) => n + blockSeconds(c, phase, mainSets, restBetweenSets, restAfter, scale), 0);
   return sum(warmupClips, 'warmup') + sum(mainClips, 'main') + sum(coolClips, 'cooldown');
 }
 
@@ -276,8 +301,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const softMax = targetSec + 5 * 60;   // 45분 목표면 45~50분을 노린다
   const restBetweenSets = intSettings.rest;
   let restAfter = intSettings.restAfter;
-  const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter);
-  const cost = c => blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter);
+  const restScale = sessionCfg.restScale || REST_SCALE_DEFAULT;
+  const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter, restScale);
+  const cost = c => blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter, restScale);
 
   // 시간을 채울 때는 코어부터 쓴다. 코어는 어느 구성에나 자연스럽게 붙고,
   // 같은 동작을 반복하거나 휴식을 늘리는 것보다 운동으로서 낫다.
@@ -313,7 +339,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   // 넘치면 본운동 뒤쪽부터 덜어낸다. 단 목표 아래로 떨어뜨리면서까지 덜지는 않는다.
   while (now() > softMax && mainClips.length > 1) {
     const without = planSeconds(
-      warmupClips, mainClips.slice(0, -1), coolClips, mainSets, restBetweenSets, restAfter);
+      warmupClips, mainClips.slice(0, -1), coolClips, mainSets, restBetweenSets, restAfter, restScale);
     if (without < targetSec) break;
     mainClips.pop();
   }
@@ -328,19 +354,29 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     mainClips.push(picked);
   }
 
-  // 남은 자투리는 동작 사이 휴식으로 정확히 맞춘다
-  if (now() < targetSec && mainClips.length > 0) {
-    const add = Math.ceil((targetSec - now()) / mainClips.length);
-    restAfter = Math.min(restAfter + add, 180);
+  // 남은 자투리는 동작 사이 휴식으로 맞춘다.
+  // 기준 휴식을 1초 올리면 실제로는 배수의 합만큼 늘어나므로 그걸로 나눈다.
+  const scaleSum = () => mainClips.reduce(
+    (n, c) => n + (restScale[c.code] == null ? 1 : restScale[c.code]), 0);
+  const padRest = () => {
+    const per = scaleSum();
+    if (!(per > 0) || now() >= targetSec) return;
+    restAfter = Math.min(restAfter + Math.ceil((targetSec - now()) / per), 180);
+  };
+  padRest();
+
+  // 풀이 비어 그래도 모자라면 세트를 늘린다.
+  // 한 번 늘리면 모든 동작이 같이 늘어 크게 넘칠 수 있으니, 넘치는 폭이
+  // 목표+10분 안에 들어올 때만 쓴다. 넘친다면 아래에서 동작을 하나씩 더해
+  // 잘게 맞추는 편이 낫다.
+  while (now() < targetSec && mainSets < 6) {
+    const bumped = planSeconds(
+      warmupClips, mainClips, coolClips, mainSets + 1, restBetweenSets, restAfter, restScale);
+    if (bumped > targetSec + 10 * 60) break;
+    mainSets += 1;
   }
 
-  // 풀이 비어 그래도 모자라면 세트를 늘린다
-  while (now() < targetSec && mainSets < 6) mainSets += 1;
-
-  if (now() < targetSec && mainClips.length > 0) {
-    const add = Math.ceil((targetSec - now()) / mainClips.length);
-    restAfter = Math.min(restAfter + add, 180);
-  }
+  padRest();
 
   // 라이브러리가 너무 작아 더 넣을 게 없으면 쓰던 동작을 다시 돌린다.
   // 이때도 코어를 먼저 돌려 같은 근력 동작이 반복되는 것을 피한다.
@@ -367,6 +403,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     mainSets,
     restBetweenSets,
     restAfter,
+    restScale,
     estimatedSeconds,
     rationale,
   };

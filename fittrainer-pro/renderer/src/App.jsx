@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { CATS, CAT_MAP, TRAINING_METHODS, CONCEPTS, CONCEPT_MAP, composeProgram } from './composeProgram';
+import { CATS, CAT_MAP, TRAINING_METHODS, CONCEPTS, CONCEPT_MAP, composeProgram,
+         REST_SCALE_DEFAULT, restAfterFor } from './composeProgram';
 
 const T = {
   bg: '#0A0A0C', surface: '#111114', panel: '#17171B', border: '#222228',
@@ -980,7 +981,8 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
 
   function generateRuleBased() {
     const enriched = getEnrichedClips();
-    const { warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter, method, rationale } =
+    const { warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter,
+            restScale, method, rationale } =
       composeProgram({ enrichedClips: enriched, customer, sessionCfg });
 
     if (warmupClips.length + mainClips.length + coolClips.length === 0) {
@@ -992,7 +994,8 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
       uid: uid(), clip, phase,
       sets: phase === 'main' ? mainSets : 1,
       restBetweenSets: phase === 'main' ? restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : restAfter,
+      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
+        : restAfterFor(clip, restAfter, restScale),
     }));
 
     const newBlocks = [
@@ -1388,6 +1391,53 @@ function sessionSeconds(ses) {
 }
 
 // 설정 화면의 한 줄. 제목/설명 왼쪽, 조작 오른쪽.
+// 동작 종류별 휴식 배수를 조절한다.
+// 강도 설정에서 나온 기준 휴식(예: 중강도 60초)에 이 값을 곱한 만큼 쉰다.
+function RestScaleEditor({ scale, onChange }) {
+  const cur = { ...REST_SCALE_DEFAULT, ...(scale || {}) };
+  const base = 60;   // 중강도 일반 목표 기준. 실제 값은 강도 설정을 따른다.
+  const changed = CATS.some(c => cur[c.code] !== REST_SCALE_DEFAULT[c.code]);
+
+  return (
+    <div style={{ padding: '14px 16px' }}>
+      <div style={{ fontSize: 12, color: T.dim, lineHeight: 1.6, marginBottom: 14 }}>
+        강도 설정에서 정해진 기준 휴식에 이 배수를 곱해 동작 뒤 휴식을 정합니다.
+        무거운 근력 뒤에는 길게, 코어나 스트레칭 뒤에는 짧게 쉬도록 하는 값입니다.
+        <br />아래 초 단위는 기준 휴식이 60초일 때({base}초 × 배수)를 보여 줍니다.
+        시퀀스를 새로 만들 때부터 반영됩니다.
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {CATS.filter(c => c.code !== 'TMR').map(c => (
+          <div key={c.code} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{
+              width: 108, flexShrink: 0, fontSize: 12, fontWeight: 600, color: c.color,
+            }}>{c.label}</span>
+            <input type="range" min={0} max={1.5} step={0.05}
+              aria-label={`${c.label} 휴식 배수`}
+              value={cur[c.code] ?? 1}
+              onChange={e => onChange({ ...cur, [c.code]: Number(e.target.value) })}
+              style={{ flex: 1, accentColor: c.color, minWidth: 90 }} />
+            <span style={{
+              width: 88, textAlign: 'right', flexShrink: 0, fontSize: 12,
+              color: T.dim, fontVariantNumeric: 'tabular-nums',
+            }}>
+              ×{(cur[c.code] ?? 1).toFixed(2)} · {Math.max(5, Math.round(base * (cur[c.code] ?? 1)))}초
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {changed && (
+        <button onClick={() => onChange({ ...REST_SCALE_DEFAULT })} style={{
+          marginTop: 14, padding: '6px 12px', borderRadius: 6, fontSize: 12,
+          background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+        }}>기본값으로</button>
+      )}
+    </div>
+  );
+}
+
 function Row({ title, desc, children }) {
   return (
     <div style={{
@@ -1543,6 +1593,11 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
             ))}
           </div>
         </Row>
+      </SetGroup>
+
+      <SetGroup title="동작 종류별 휴식">
+        <RestScaleEditor scale={settings.restScale}
+          onChange={v => onSetting('restScale', v)} />
       </SetGroup>
 
       <SetGroup title="스마트폰 원격 조작">
@@ -2567,6 +2622,7 @@ export default function App() {
   const [settings, setSettings] = useState(() => ({
     restPreview: true,
     defaultSpeed: 1,
+    restScale: REST_SCALE_DEFAULT,
     ...loadLS('ft_settings', {}),
   }));
 
@@ -2581,6 +2637,12 @@ export default function App() {
     duration: 30, intensity: '중강도', focus: '전신',
     condition: '보통', includeCats: [], method: 'auto',
   });
+
+  // 설정 탭에서 정한 동작 종류별 휴식 배수를 조합에 얹는다
+  const cfgWithRest = useMemo(
+    () => ({ ...sessionCfg, restScale: settings.restScale || REST_SCALE_DEFAULT }),
+    [sessionCfg, settings.restScale],
+  );
 
   // 파일 목록이 실제로 바뀌었는지 판단하는 키.
   // clips 는 map 으로 매번 새 배열이 나오므로 그대로 의존성에 쓰면 검사가 무한 반복된다.
@@ -2872,7 +2934,7 @@ export default function App() {
     if (!con) return null;
     if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return null; }
 
-    const cfg = { ...sessionCfg, includeCats: con.cats, focus: con.focus, method: con.method };
+    const cfg = { ...cfgWithRest, includeCats: con.cats, focus: con.focus, method: con.method };
     const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
 
     // 길이를 모르는 영상은 40초로 가정하고 짜기 때문에, 아직 다 못 읽은 상태로
@@ -2895,7 +2957,8 @@ export default function App() {
       uid: uid(), clip, phase,
       sets: phase === 'main' ? r.mainSets : 1,
       restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : r.restAfter,
+      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
+        : restAfterFor(clip, r.restAfter, r.restScale),
     }));
     const newBlocks = [
       ...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown'),
@@ -2935,7 +2998,7 @@ export default function App() {
   // 폰에서 '자동 조합'을 눌렀을 때. 데스크톱 화면의 조합과 같은 규칙을 쓴다.
   function composeToBlocks() {
     const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
-    const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg });
+    const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfgWithRest });
     const total = r.warmupClips.length + r.mainClips.length + r.coolClips.length;
     if (total === 0) {
       window.electronAPI?.sendPlayerState?.({
@@ -2947,7 +3010,8 @@ export default function App() {
       uid: uid(), clip, phase,
       sets: phase === 'main' ? r.mainSets : 1,
       restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15 : r.restAfter,
+      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
+        : restAfterFor(clip, r.restAfter, r.restScale),
     }));
     const next = [...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown')];
     setBlocks(next);
@@ -3082,7 +3146,7 @@ export default function App() {
             setTab={setTab} setActiveCustomer={setActiveCustomer} setSessionCfg={setSessionCfg} />
         )}
         {tab === 'session' && (
-          <SessionTab customer={activeCustomer} sessionCfg={sessionCfg} setSessionCfg={setSessionCfg}
+          <SessionTab customer={activeCustomer} sessionCfg={cfgWithRest} setSessionCfg={setSessionCfg}
             clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
         {tab === 'builder' && (

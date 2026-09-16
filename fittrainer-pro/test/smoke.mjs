@@ -191,6 +191,27 @@ async function checkQueueTab() {
 }
 await checkQueueTab();
 
+// 설정 탭: 동작 종류별 휴식 배수
+async function checkRestScale() {
+  const before = failures.length;
+  await page.getByRole('button', { name: '설정', exact: true }).first().click();
+  await page.waitForTimeout(300);
+  try {
+    const sliders = page.locator('input[type=range][aria-label$="휴식 배수"]');
+    const n = await sliders.count();
+    if (n < 8) throw new Error(`배수 조절기가 ${n}개뿐`);
+    const txt = await page.locator('#root').innerText();
+    // 기본값은 근력 ×1.00 60초, 스트레칭 ×0.30 18초
+    for (const want of ['×1.00 · 60초', '×0.30 · 18초']) {
+      if (!txt.includes(want)) throw new Error(`'${want}' 표시가 없음`);
+    }
+  } catch (e) {
+    failures.push(`[설정] 휴식 배수: ${e.message.split('\n')[0]}`);
+  }
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  설정 · 동작 종류별 휴식`);
+}
+await checkRestScale();
+
 await browser.close();
 server.close();
 
