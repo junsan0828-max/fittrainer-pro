@@ -10,7 +10,7 @@
     "build:renderer": "cd renderer && npm install && npx vite build",
     "build": "npm run build:renderer && electron-builder",
     "pack": "npm run build:renderer && electron-builder --dir",
-    "test": "node test/smoke.mjs"
+    "test": "node test/compose.mjs && node test/smoke.mjs"
   },
   "build": {
     "appId": "com.fittrainer.pro",

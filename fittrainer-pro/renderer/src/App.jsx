@@ -2493,11 +2493,31 @@ export default function App() {
   // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
   // 저장된 시퀀스와 재생 대기열
+  // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
+  // clips 가 이 값을 참조하므로 반드시 먼저 선언되어야 한다.
+  // 앱을 껐다 켤 때마다 다시 읽으면 그동안 길이를 0 으로 알고 조합하게 된다.
+  // 한 번 읽은 길이는 저장해 두고 바로 쓴다.
+  const [durations, setDurations] = useState(() => loadLS('ft_durations', {}));
+
   const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
   const [history, setHistory] = useState(() => loadLS('ft_history', []));
   // 지금 진행 중인 기록의 id. 큐가 바뀌면 새 기록을 만든다.
   const runRef = useRef({ id: null, key: '' });
+
+  // 시퀀스는 만들 때의 클립을 그대로 안고 있다. 그때 길이를 아직 못 읽었다면
+  // 0 이 박힌 채로 저장돼, 45분으로 짠 시퀀스가 20분대로 보이고 실제로도 그렇게 끝난다.
+  // 지금 아는 길이로 덮어 읽는다. 이미 잘못 저장된 시퀀스도 이 자리에서 되살아난다.
+  const hydratedSessions = useMemo(() => sessions.map(ses => {
+    let touched = false;
+    const blocks = (ses.blocks || []).map(b => {
+      const known = durations[b.clip?.filePath];
+      if (!known || known === b.clip?.duration) return b;
+      touched = true;
+      return { ...b, clip: { ...b.clip, duration: known } };
+    });
+    return touched ? { ...ses, blocks } : ses;
+  }), [sessions, durations]);
 
   // 재생 탭이 쓰는 큐.
   // 평소에는 체크된 시퀀스가 곧 대기열이고, 한 개만 재생하라는 지시가 있으면
@@ -2505,16 +2525,13 @@ export default function App() {
   const playlistEntries = useMemo(() => {
     if (playlist.length) {
       return playlist.map(p => {
-        const ses = sessions.find(x => x.id === p.sessionId);
+        const ses = hydratedSessions.find(x => x.id === p.sessionId);
         return ses ? { ...ses, gap: { mode: 'wait', minutes: 0 } } : null;
       }).filter(Boolean);
     }
-    return sessions.filter(s => s.queued !== false);
-  }, [playlist, sessions]);
+    return hydratedSessions.filter(s => s.queued !== false);
+  }, [playlist, hydratedSessions]);
 
-  // 파일 경로 -> 영상 길이(초). 총 소요 시간 계산에 쓴다.
-  // clips 가 이 값을 참조하므로 반드시 먼저 선언되어야 한다.
-  const [durations, setDurations] = useState({});
 
   const clips = useMemo(
     () => rawClips.map(c => {
@@ -2594,7 +2611,11 @@ export default function App() {
           .map(([filePath, r]) => ({ filePath, video: r.video, audio: r.audio }));
         const secs = {};
         for (const [fp, r] of Object.entries(results || {})) if (r.duration) secs[fp] = r.duration;
-        setDurations(prev => ({ ...prev, ...secs }));
+        setDurations(prev => {
+          const next = { ...prev, ...secs };
+          saveData('ft_durations', next);
+          return next;
+        });
         setCodec({ state: 'done', unsupported, progress: null });
       })
       .catch(() => {
@@ -2852,6 +2873,16 @@ export default function App() {
 
     const cfg = { ...sessionCfg, includeCats: con.cats, focus: con.focus, method: con.method };
     const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
+
+    // 길이를 모르는 영상은 40초로 가정하고 짜기 때문에, 아직 다 못 읽은 상태로
+    // 만들면 45분짜리가 실제로는 20분대로 끝난다. 다 읽을 때까지 기다리게 한다.
+    const pool = enriched.filter(c => con.cats.includes(c.code));
+    const unknown = pool.filter(c => !(c.duration > 0)).length;
+    if (pool.length > 0 && unknown / pool.length > 0.2) {
+      alert(`영상 길이를 아직 읽는 중입니다 (${pool.length}개 중 ${unknown}개 남음).\n`
+        + '지금 만들면 시간이 목표보다 짧게 나옵니다. 잠시 후 다시 눌러 주세요.');
+      return null;
+    }
     const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfg });
 
     if (r.warmupClips.length + r.mainClips.length + r.coolClips.length === 0) {
@@ -2998,7 +3029,8 @@ export default function App() {
         api.loadData('ft_history'),
         api.loadData('ft_settings'),
         api.loadData('ft_prefix_cats'),
-      ]).then(([cust, blks, attrs, ses, pl, hist, cfg, prefix]) => {
+        api.loadData('ft_durations'),
+      ]).then(([cust, blks, attrs, ses, pl, hist, cfg, prefix, durs]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
@@ -3009,6 +3041,7 @@ export default function App() {
         // 파일에만 남아 있던 분류 설정을 되살린다.
         // 브라우저 저장소가 비워져도 접두어 매핑을 잃지 않게 한다.
         if (prefix) { setPrefixCats(prefix); saveLS('ft_prefix_cats', prefix); }
+        if (durs)   { setDurations(prev => ({ ...durs, ...prev })); saveLS('ft_durations', durs); }
       }).catch(() => {});
     }
 
@@ -3055,7 +3088,7 @@ export default function App() {
           <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
         {tab === 'queue' && (
-          <QueueTab sessions={sessions} setSessions={setSessions}
+          <QueueTab sessions={hydratedSessions} setSessions={setSessions}
             blocks={blocks} setTab={setTab}
             customer={activeCustomer} sessionCfg={sessionCfg}
             onGenerate={generateConcept} onPlaySession={playSession}

@@ -58,7 +58,12 @@ const STORE = {
   ft_sessions: [
     { id: 's1', name: '아침 시퀀스', blocks: [block(CLIPS[0]), block(CLIPS[1])] },
     { id: 's2', name: '저녁 시퀀스', blocks: [block(CLIPS[2])] },
+    // 길이를 못 읽은 채 저장된 시퀀스. ft_durations 로 되살아나야 한다.
+    { id: 's3', name: '길이 잃은 시퀀스', queued: false,
+      blocks: [block({ ...CLIPS[0], duration: 0 }), block({ ...CLIPS[1], duration: 0 })] },
   ],
+  // c1=40초, c2=35초 → 블록당 40*2+20+60=160, 35*2+20+60=150 → 합 310초 = 5분 10초
+  ft_durations: { 'C:/v/a.mp4': 40, 'C:/v/b.mp4': 35, 'C:/v/c.mp4': 45 },
   ft_playlist: [],
   ft_history: [{ id: 'h1', at: Date.now(), name: '아침 시퀀스', seconds: 2700 }],
   ft_settings: {},
@@ -162,6 +167,16 @@ async function checkQueueTab() {
       throw new Error('시각 입력이 나타나지 않음');
     if (await page.getByRole('button', { name: '다음 정각', exact: true }).count() === 0)
       throw new Error("'다음 정각' 버튼이 없음");
+  });
+
+  await step('길이를 못 읽고 저장된 시퀀스가 되살아나야 함', async () => {
+    const all = await page.locator('#root').innerText();
+    const i = all.indexOf('길이 잃은 시퀀스');
+    if (i === -1) throw new Error('시퀀스가 목록에 없음');
+    const near = all.slice(i, i + 80).replace(/\n/g, ' / ');
+    // 되살아나지 않으면 휴식만 남아 2분 40초로 보인다
+    if (!near.includes('5분 10초'))
+      throw new Error(`길이가 되살아나지 않음 — 표시: ${near}`);
   });
 
   await step('체크를 풀면 간격 설정이 사라져야 함', async () => {
