@@ -48,11 +48,17 @@ const CLIPS = [
 ];
 
 const block = (clip, sets = 2) =>
-  ({ uid: 'b_' + clip.id, clip, sets, restBetweenSets: 20, restAfter: 60 });
+  ({ uid: 'b_' + clip.id, clip, clips: [clip], sets,
+     restBetweenSets: 20, restWithin: 0, restAfter: 60 });
+
+// 여러 동작을 한 라운드로 묶은 블록
+const group = (clips, sets = 3) =>
+  ({ uid: 'g_' + clips.map(c => c.id).join('_'), clip: clips[0], clips, sets,
+     restBetweenSets: 20, restWithin: 10, restAfter: 60 });
 
 const STORE = {
   ft_customers: [{ id: 'u1', name: '홍길동', goal: '체지방 감소', level: '초급', notes: '' }],
-  ft_blocks: [block(CLIPS[0])],
+  ft_blocks: [block(CLIPS[0]), group([CLIPS[1], CLIPS[2]])],
   ft_clip_attrs: {},
   // 시퀀스 사이 간격을 시험하려면 두 개 이상이어야 한다
   ft_sessions: [
@@ -211,6 +217,42 @@ async function checkRestScale() {
   console.log(`${failures.length === before ? '  OK' : 'FAIL'}  설정 · 동작 종류별 휴식`);
 }
 await checkRestScale();
+
+// 시퀀스 빌더: 묶음 표시와 묶기/풀기
+async function checkGrouping() {
+  const before = failures.length;
+  await page.getByRole('button', { name: '시퀀스 빌더', exact: true }).first().click();
+  await page.waitForTimeout(350);
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[빌더] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+
+  await step('묶음이 동작을 이어서 보여야 함', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('햄스트링 → 점핑잭')) throw new Error('묶음 표시가 없음');
+    if (!txt.includes('묶음 2동작')) throw new Error("'묶음 2동작' 안내가 없음");
+  });
+
+  await step('묶음은 풀 수 있어야 함', async () => {
+    if (await page.getByRole('button', { name: '묶음 풀기', exact: true }).count() === 0)
+      throw new Error("'묶음 풀기' 버튼이 없음");
+  });
+
+  await step('낱개 동작은 위와 묶을 수 있어야 함', async () => {
+    if (await page.getByRole('button', { name: '위와 묶기', exact: true }).count() === 0)
+      throw new Error("'위와 묶기' 버튼이 없음");
+  });
+
+  await step('풀면 낱개 두 줄이 되어야 함', async () => {
+    await page.getByRole('button', { name: '묶음 풀기', exact: true }).first().click();
+    await page.waitForTimeout(300);
+    const txt = await page.locator('#root').innerText();
+    if (txt.includes('묶음 2동작')) throw new Error('풀었는데 묶음이 남아 있음');
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  빌더 · 동작 묶기/풀기`);
+}
+await checkGrouping();
 
 await browser.close();
 server.close();

@@ -981,28 +981,15 @@ function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blo
 
   function generateRuleBased() {
     const enriched = getEnrichedClips();
-    const { warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter,
-            restScale, method, rationale } =
-      composeProgram({ enrichedClips: enriched, customer, sessionCfg });
+    const r = composeProgram({ enrichedClips: enriched, customer, sessionCfg });
+    const { warmupClips, mainClips, coolClips, method, rationale } = r;
 
     if (warmupClips.length + mainClips.length + coolClips.length === 0) {
       alert(explainEmptyPool(enriched, sessionCfg));
       return;
     }
 
-    const makeBlocks = (clipList, phase) => clipList.map(clip => ({
-      uid: uid(), clip, phase,
-      sets: phase === 'main' ? mainSets : 1,
-      restBetweenSets: phase === 'main' ? restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
-        : restAfterFor(clip, restAfter, restScale),
-    }));
-
-    const newBlocks = [
-      ...makeBlocks(warmupClips, 'warmup'),
-      ...makeBlocks(mainClips, 'main'),
-      ...makeBlocks(coolClips, 'cooldown'),
-    ];
+    const newBlocks = blocksFromPlan(r);
 
     setBlocks(newBlocks);
     saveData('ft_blocks', newBlocks);
@@ -1116,6 +1103,42 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
     setBlocks(prev => { const next = [...prev, block]; saveData('ft_blocks', next); return next; });
   }
 
+  // 이 블록을 바로 위 블록과 한 라운드로 묶는다.
+  // [로우] [푸시업] [로우] [팔] 을 차례로 묶으면 한 바퀴가 1세트가 된다.
+  function mergeUp(idx) {
+    setBlocks(prev => {
+      if (idx < 1) return prev;
+      const above = prev[idx - 1], cur = prev[idx];
+      if (blockClips(above).length + blockClips(cur).length > 4) {
+        alert('한 묶음에는 동작 4개까지 넣을 수 있습니다.');
+        return prev;
+      }
+      const clips = [...blockClips(above), ...blockClips(cur)];
+      const merged = {
+        ...above, clips, clip: clips[0],
+        restWithin: above.restWithin || 10,
+      };
+      const next = [...prev.slice(0, idx - 1), merged, ...prev.slice(idx + 1)];
+      saveData('ft_blocks', next);
+      return next;
+    });
+  }
+
+  // 묶음을 다시 동작 하나씩으로 되돌린다
+  function splitBlock(idx) {
+    setBlocks(prev => {
+      const b = prev[idx];
+      const list = blockClips(b);
+      if (list.length < 2) return prev;
+      const parts = list.map(clip => ({
+        ...b, uid: uid(), clip, clips: [clip], restWithin: 0,
+      }));
+      const next = [...prev.slice(0, idx), ...parts, ...prev.slice(idx + 1)];
+      saveData('ft_blocks', next);
+      return next;
+    });
+  }
+
   function removeBlock(uid) {
     setBlocks(prev => { const next = prev.filter(b => b.uid !== uid); saveData('ft_blocks', next); return next; });
   }
@@ -1141,7 +1164,12 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
   const totalSets = blocks.reduce((s, b) => s + b.sets, 0);
   const catCounts = {};
   blocks.forEach(b => { catCounts[b.clip?.code] = (catCounts[b.clip?.code] || 0) + 1; });
-  const blockSec = b => (b.clip?.duration || 60) * b.sets + (b.sets - 1) * b.restBetweenSets + b.restAfter;
+  const blockSec = (b) => {
+    const list = blockClips(b);
+    const round = list.reduce((n, c) => n + (c?.duration || 60), 0)
+      + (b.restWithin || 0) * (list.length - 1);
+    return round * b.sets + (b.sets - 1) * b.restBetweenSets + b.restAfter;
+  };
   const totalSec = blocks.reduce((s, b) => s + blockSec(b), 0);
   const estMinutes = totalSec / 60;
   const phaseSec = phase => blocks.filter(b => b.phase === phase).reduce((s, b) => s + blockSec(b), 0);
@@ -1229,11 +1257,37 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
                     fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
                     background: (cat?.color || T.dimMid) + '22', color: cat?.color || T.dim,
                   }}>{block.clip?.code}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{block.clip?.name || block.clip?.fileName}</div>
-                    <div style={{ fontSize: 11, color: T.dim }}>{block.clip?.part}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {blockClips(block).length > 1 ? (
+                      <>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>
+                          {blockClips(block).map(c => c?.name || c?.fileName).join(' → ')}
+                        </div>
+                        <div style={{ fontSize: 11, color: T.accent }}>
+                          묶음 {blockClips(block).length}동작 · 한 바퀴가 1세트
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{block.clip?.name || block.clip?.fileName}</div>
+                        <div style={{ fontSize: 11, color: T.dim }}>{block.clip?.part}</div>
+                      </>
+                    )}
                   </div>
                   <span style={{ fontSize: 11, color: T.dim, minWidth: 38, textAlign: 'right' }}>{fmtSec(blockSec(block))}</span>
+                  {blockClips(block).length > 1 ? (
+                    <button onClick={() => splitBlock(idx)} title="묶음을 동작별로 되돌립니다"
+                      style={{ padding: '4px 9px', borderRadius: 5, fontSize: 11,
+                        background: 'transparent', color: T.accent,
+                        border: `1px solid ${T.accent}55` }}>묶음 풀기</button>
+                  ) : (
+                    <button onClick={() => mergeUp(idx)} disabled={idx === 0}
+                      title="바로 위 동작과 한 라운드로 묶습니다"
+                      style={{ padding: '4px 9px', borderRadius: 5, fontSize: 11,
+                        background: 'transparent',
+                        color: idx === 0 ? T.dimMid : T.dim,
+                        border: `1px solid ${T.border}` }}>위와 묶기</button>
+                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
                     <span style={{ color: T.dim }}>세트</span>
                     <select value={block.sets} onChange={e => updateBlock(block.uid, 'sets', Number(e.target.value))}
@@ -1329,11 +1383,28 @@ function SummaryRow({ label, value }) {
   );
 }
 
+// 한 블록은 동작 하나일 수도, 여러 동작을 한 라운드로 묶은 것일 수도 있다.
+// 묶음이면 [로우 → 푸시업 → 로우 → 팔] 한 바퀴가 1세트고, 그걸 세트 수만큼 돈다.
+function blockClips(block) {
+  return block.clips?.length ? block.clips : [block.clip];
+}
+
 function expandToQueue(blocks, sessionName) {
   const q = [];
   blocks.forEach(block => {
+    const list = blockClips(block);
+    const within = block.restWithin || 0;
     for (let s = 1; s <= block.sets; s++) {
-      q.push({ type: 'clip', clip: block.clip, setNum: s, totalSets: block.sets, sessionName });
+      list.forEach((clip, k) => {
+        q.push({
+          type: 'clip', clip, setNum: s, totalSets: block.sets, sessionName,
+          partNum: list.length > 1 ? k + 1 : 0, partTotal: list.length,
+          groupName: list.length > 1 ? list.map(c => c?.name).filter(Boolean).join(' + ') : '',
+        });
+        // 라운드 안 전환은 짧게. 묶음은 이어서 가는 맛이라 길면 의미가 없다.
+        if (k < list.length - 1 && within > 0)
+          q.push({ type: 'rest', restKind: 'within', duration: within, sessionName });
+      });
       if (s < block.sets)
         q.push({ type: 'rest', restKind: 'set', duration: block.restBetweenSets, sessionName });
     }
@@ -1436,6 +1507,25 @@ function RestScaleEditor({ scale, onChange }) {
       )}
     </div>
   );
+}
+
+// 조합 결과를 재생 블록으로 바꾼다.
+// 본운동은 묶음(라운드) 하나가 블록 하나가 되고, 준비·정리운동은 동작 하나씩이다.
+function blocksFromPlan(r) {
+  const single = (list, phase) => list.map(clip => ({
+    uid: uid(), clip, clips: [clip], phase,
+    sets: 1, restBetweenSets: 10, restWithin: 0,
+    restAfter: phase === 'warmup' ? 10 : 15,
+  }));
+  const units = r.mainUnits || r.mainClips.map(c => [c]);
+  const main = units.map(unit => ({
+    uid: uid(), clip: unit[0], clips: unit, phase: 'main',
+    sets: r.mainSets,
+    restBetweenSets: r.restBetweenSets,
+    restWithin: unit.length > 1 ? (r.restWithin || 0) : 0,
+    restAfter: restAfterFor(unit[0], r.restAfter, r.restScale),
+  }));
+  return [...single(r.warmupClips, 'warmup'), ...main, ...single(r.coolClips, 'cooldown')];
 }
 
 function Row({ title, desc, children }) {
@@ -1590,6 +1680,20 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
             {[0.5, 1, 1.5, 2].map(v => (
               <button key={v} className={settings.defaultSpeed === v ? 'on' : ''}
                 onClick={() => onSetting('defaultSpeed', v)}>{v}x</button>
+            ))}
+          </div>
+        </Row>
+      </SetGroup>
+
+      <SetGroup title="동작 묶음">
+        <Row title="한 라운드에 묶을 동작 수"
+          desc="스쿼트 하나를 3세트 하는 대신, [스쿼트 → 앞벅지 폼롤링]을 한 바퀴로 삼아 반복합니다. 자동은 구성 방식이 정합니다(블록형 1개, 순환 3개, 교차·슈퍼세트 2개). 영상이 길면 시간이 튀지 않게 자동으로 줄어듭니다.">
+          <div className="pl-speed" style={{ background: T.panel }}>
+            {[0, 1, 2, 3, 4].map(n => (
+              <button key={n} className={(settings.groupSize || 0) === n ? 'on' : ''}
+                onClick={() => onSetting('groupSize', n)}>
+                {n === 0 ? '자동' : `${n}개`}
+              </button>
             ))}
           </div>
         </Row>
@@ -2211,7 +2315,8 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
     return null;
   }, [queue, ci]);
   const nextSrc = clipSrc(nextClip?.clip, playbackMap);
-  const restColor = cur?.restKind === 'set' ? '#F59E0B' : '#7C3AED';
+  const restColor = cur?.restKind === 'within' ? '#0EA5E9'
+    : cur?.restKind === 'set' ? '#F59E0B' : '#7C3AED';
 
   useEffect(() => {
     setVideoErr(null);
@@ -2359,7 +2464,8 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
             {/* 왼쪽: 카운트다운. 영상과 겹치지 않는 깨끗한 면이라 숫자가 묻히지 않는다. */}
             <div className="rest-side">
               <div className="rest-lab" style={{ color: restColor }}>
-                {cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}
+                {cur.restKind === 'within' ? '묶음 안 전환'
+                  : cur.restKind === 'set' ? '세트 휴식' : '동작 전환 휴식'}
               </div>
               <div className="rest-num" style={{ color: restColor }}>{restCountdown}</div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -2471,11 +2577,18 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
                   fontSize: 14, fontWeight: 600, color: '#fff', overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>{cur?.clip?.name || ''}</span>
+                {cur?.partTotal > 1 && (
+                  <span title={cur.groupName} style={{
+                    fontSize: 12, fontWeight: 700, color: T.accent, flexShrink: 0,
+                    padding: '2px 8px', borderRadius: 4, background: T.accent + '22',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>묶음 {cur.partNum}/{cur.partTotal}</span>
+                )}
                 {cur?.totalSets > 1 && (
                   <span style={{
                     fontSize: 12, color: 'rgba(255,255,255,.6)', flexShrink: 0,
                     fontVariantNumeric: 'tabular-nums',
-                  }}>세트 {cur.setNum}/{cur.totalSets}</span>
+                  }}>{cur.partTotal > 1 ? '라운드' : '세트'} {cur.setNum}/{cur.totalSets}</span>
                 )}
               </div>
 
@@ -2566,11 +2679,17 @@ export default function App() {
   // 지금 아는 길이로 덮어 읽는다. 이미 잘못 저장된 시퀀스도 이 자리에서 되살아난다.
   const hydratedSessions = useMemo(() => sessions.map(ses => {
     let touched = false;
-    const blocks = (ses.blocks || []).map(b => {
-      const known = durations[b.clip?.filePath];
-      if (!known || known === b.clip?.duration) return b;
+    const fix = c => {
+      const known = durations[c?.filePath];
+      if (!known || known === c?.duration) return c;
       touched = true;
-      return { ...b, clip: { ...b.clip, duration: known } };
+      return { ...c, duration: known };
+    };
+    // 묶음 블록은 clips 배열이 실제 재생에 쓰이므로 그쪽도 함께 되살린다
+    const blocks = (ses.blocks || []).map(b => {
+      const clip = fix(b.clip);
+      const clips = b.clips?.length ? b.clips.map(fix) : b.clips;
+      return clip === b.clip && clips === b.clips ? b : { ...b, clip, clips };
     });
     return touched ? { ...ses, blocks } : ses;
   }), [sessions, durations]);
@@ -2640,8 +2759,12 @@ export default function App() {
 
   // 설정 탭에서 정한 동작 종류별 휴식 배수를 조합에 얹는다
   const cfgWithRest = useMemo(
-    () => ({ ...sessionCfg, restScale: settings.restScale || REST_SCALE_DEFAULT }),
-    [sessionCfg, settings.restScale],
+    () => ({
+      ...sessionCfg,
+      restScale: settings.restScale || REST_SCALE_DEFAULT,
+      groupSize: settings.groupSize || 0,   // 0 이면 구성 방식이 정한다
+    }),
+    [sessionCfg, settings.restScale, settings.groupSize],
   );
 
   // 파일 목록이 실제로 바뀌었는지 판단하는 키.
@@ -2953,16 +3076,7 @@ export default function App() {
       return null;
     }
 
-    const mk = (list, phase) => list.map(clip => ({
-      uid: uid(), clip, phase,
-      sets: phase === 'main' ? r.mainSets : 1,
-      restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
-        : restAfterFor(clip, r.restAfter, r.restScale),
-    }));
-    const newBlocks = [
-      ...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown'),
-    ];
+    const newBlocks = blocksFromPlan(r);
 
     // 같은 컨셉이 여러 개면 뒤에 번호를 붙인다
     const base = activeCustomer?.name ? `${activeCustomer.name} · ${con.label}` : con.label;
@@ -3006,14 +3120,7 @@ export default function App() {
       });
       return;
     }
-    const mk = (list, phase) => list.map(clip => ({
-      uid: uid(), clip, phase,
-      sets: phase === 'main' ? r.mainSets : 1,
-      restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-      restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
-        : restAfterFor(clip, r.restAfter, r.restScale),
-    }));
-    const next = [...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown')];
+    const next = blocksFromPlan(r);
     setBlocks(next);
     saveData('ft_blocks', next);
   }

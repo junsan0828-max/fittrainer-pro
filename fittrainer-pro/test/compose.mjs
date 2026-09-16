@@ -15,20 +15,29 @@ import { composeProgram, CONCEPT_MAP, restAfterFor } from '../renderer/src/compo
 
 // 재생 큐가 실제로 쓰는 계산. App.jsx 의 expandToQueue + itemSeconds 와 같은 규칙이다.
 function actualSeconds(blocks) {
-  return blocks.reduce((t, b) =>
-    t + (b.clip?.duration || 0) * b.sets + b.restBetweenSets * (b.sets - 1) + b.restAfter, 0);
+  return blocks.reduce((t, b) => {
+    const list = b.clips?.length ? b.clips : [b.clip];
+    const round = list.reduce((n, c) => n + (c?.duration || 0), 0)
+      + (b.restWithin || 0) * (list.length - 1);
+    return t + round * b.sets + b.restBetweenSets * (b.sets - 1) + b.restAfter;
+  }, 0);
 }
 
-// generateConcept 이 조합 결과를 블록으로 바꾸는 방식과 같아야 한다
+// App.jsx 의 blocksFromPlan 과 같은 방식이어야 한다
 function toBlocks(r) {
-  const mk = (list, phase) => list.map(clip => ({
-    clip, phase,
-    sets: phase === 'main' ? r.mainSets : 1,
-    restBetweenSets: phase === 'main' ? r.restBetweenSets : 10,
-    restAfter: phase === 'warmup' ? 10 : phase === 'cooldown' ? 15
-      : restAfterFor(clip, r.restAfter, r.restScale),
+  const single = (list, phase) => list.map(clip => ({
+    clip, clips: [clip], phase, sets: 1, restBetweenSets: 10, restWithin: 0,
+    restAfter: phase === 'warmup' ? 10 : 15,
   }));
-  return [...mk(r.warmupClips, 'warmup'), ...mk(r.mainClips, 'main'), ...mk(r.coolClips, 'cooldown')];
+  const units = r.mainUnits || r.mainClips.map(c => [c]);
+  const main = units.map(unit => ({
+    clip: unit[0], clips: unit, phase: 'main',
+    sets: r.mainSets,
+    restBetweenSets: r.restBetweenSets,
+    restWithin: unit.length > 1 ? (r.restWithin || 0) : 0,
+    restAfter: restAfterFor(unit[0], r.restAfter, r.restScale),
+  }));
+  return [...single(r.warmupClips, 'warmup'), ...main, ...single(r.coolClips, 'cooldown')];
 }
 
 const CATS = ['STR', 'MOV', 'CFR', 'CFS', 'CCB', 'CCS', 'STT', 'CAR'];

@@ -89,10 +89,37 @@ export function blockSeconds(clip, phase, mainSets, restBetweenSets, restAfter, 
   return clipSec(clip) * sets + between * (sets - 1) + after;
 }
 
-function planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter, scale) {
+// 묶음 하나가 잡아먹는 시간.
+// 묶음은 [로우 → 푸시업 → 로우 → 팔] 처럼 여러 동작을 한 라운드로 삼아
+// 세트 수만큼 돌린다. 라운드 안 전환은 짧게, 라운드 사이는 세트 휴식,
+// 묶음이 끝나면 대표 동작 기준의 동작 휴식을 준다.
+export function unitSeconds(unit, mainSets, restBetweenSets, restAfter, restWithin, scale) {
+  const list = Array.isArray(unit) ? unit : [unit];
+  const round = list.reduce((n, c) => n + clipSec(c), 0) + restWithin * (list.length - 1);
+  return round * mainSets
+    + restBetweenSets * (mainSets - 1)
+    + restAfterFor(list[0], restAfter, scale);
+}
+
+function planSeconds(warmupClips, mainUnits, coolClips, mainSets, restBetweenSets, restAfter, scale, restWithin) {
   const sum = (list, phase) => list.reduce(
     (n, c) => n + blockSeconds(c, phase, mainSets, restBetweenSets, restAfter, scale), 0);
-  return sum(warmupClips, 'warmup') + sum(mainClips, 'main') + sum(coolClips, 'cooldown');
+  const main = mainUnits.reduce(
+    (n, u) => n + unitSeconds(u, mainSets, restBetweenSets, restAfter, restWithin, scale), 0);
+  return sum(warmupClips, 'warmup') + main + sum(coolClips, 'cooldown');
+}
+
+// 방식별 기본 묶음 크기. 블록형은 초급자용이라 한 동작씩 예측 가능하게 간다.
+export const GROUP_SIZE = { block: 1, circuit: 3, interleave: 2, superset: 2 };
+
+// 고른 동작들을 라운드로 묶는다. 이미 방식별로 순서가 잡혀 있어
+// 앞에서부터 잘라도 근력·코어·유산소가 한 라운드에 섞인다.
+export function groupIntoUnits(clips, size) {
+  const n = Math.max(1, Math.min(4, size || 1));
+  if (n === 1) return clips.map(c => [c]);
+  const units = [];
+  for (let i = 0; i < clips.length; i += n) units.push(clips.slice(i, i + n));
+  return units;
 }
 
 export function pickMethod(customer, sessionCfg) {
@@ -298,12 +325,35 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   // 수업 중에 채울 방법이 없다. 그래서 어떤 경우에도 목표 아래로는 내려가지 않는다.
   // softMax 는 되도록 지키는 선일 뿐 하한선을 이기지 못한다.
   const targetSec = dur * 60;
-  const softMax = targetSec + 5 * 60;   // 45분 목표면 45~50분을 노린다
+  const softMax = targetSec + 5 * 60;
   const restBetweenSets = intSettings.rest;
+  // 라운드 안 전환은 세트 휴식의 절반. 묶음은 이어서 가는 맛이라 길면 의미가 없다.
+  const restWithin = Math.max(5, Math.round(intSettings.rest / 2));
   let restAfter = intSettings.restAfter;
   const restScale = sessionCfg.restScale || REST_SCALE_DEFAULT;
-  const now = () => planSeconds(warmupClips, mainClips, coolClips, mainSets, restBetweenSets, restAfter, restScale);
-  const cost = c => blockSeconds(c, 'main', mainSets, restBetweenSets, restAfter, restScale);
+
+  // ---- 동작을 라운드로 묶는다 ----
+  // 스쿼트만 3세트 하는 것보다 [스쿼트 → 앞벅지 폼롤링]을 한 라운드로 삼아
+  // 3번 도는 편이 자극도 회복도 낫다. 묶음 크기는 방식이 정하고, 설정에서
+  // 덮어쓸 수 있다.
+  //
+  // 다만 묶음 하나가 너무 커지면 시간 조절이 거칠어진다. 150초짜리 셋을
+  // 3세트 묶으면 한 덩이가 22분이라, 넣고 빼는 것만으로 목표를 한참 넘긴다.
+  // 한 묶음이 목표의 15%를 넘지 않을 때까지 크기를 줄인다.
+  const avgSec = mainClips.length
+    ? mainClips.reduce((n, c) => n + clipSec(c), 0) / mainClips.length
+    : FALLBACK_CLIP_SEC;
+  let groupSize = Math.max(1, Math.min(4,
+    Number(sessionCfg.groupSize) || GROUP_SIZE[method] || 1));
+  while (groupSize > 1
+    && (avgSec * groupSize + restWithin * (groupSize - 1)) * mainSets > targetSec * 0.15) {
+    groupSize -= 1;
+  }
+  let mainUnits = groupIntoUnits(avoidConsecutiveSamePart(mainClips), groupSize);
+
+  const now = () => planSeconds(warmupClips, mainUnits, coolClips,
+    mainSets, restBetweenSets, restAfter, restScale, restWithin);
+  const cost = u => unitSeconds(u, mainSets, restBetweenSets, restAfter, restWithin, restScale);
 
   // 시간을 채울 때는 코어부터 쓴다. 코어는 어느 구성에나 자연스럽게 붙고,
   // 같은 동작을 반복하거나 휴식을 늘리는 것보다 운동으로서 낫다.
@@ -312,52 +362,68 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     ? [queues.core, queues.str, queues.car, queues.warm, queues.cool]
     : [queues.cool, queues.warm, queues.str, queues.car];
 
-  // 가장 짧은 후보를 꺼낸다. 필요하면 상한을 넘겨서라도 꺼낸다.
-  const takeShortest = (limit) => {
-    let best = null, bestQ = null, bestIdx = -1;
-    for (const q of fillOrder) {
-      q.forEach((c, k) => {
-        if (limit != null && now() + cost(c) > limit) return;
-        if (!best || cost(c) < cost(best)) { best = c; bestQ = q; bestIdx = k; }
-      });
+  // 채울 때 꺼내는 단위도 묶음이다. 남은 클립을 묶음 크기만큼 모아 한 덩이로 넣는다.
+  const takeUnit = (limit) => {
+    const picked = [];
+    while (picked.length < groupSize) {
+      let best = null, bestQ = null, bestIdx = -1;
+      for (const q of fillOrder) {
+        q.forEach((c, k) => {
+          const trial = [...picked, c];
+          if (limit != null && now() + cost(trial) > limit) return;
+          if (!best || clipSec(c) < clipSec(best)) { best = c; bestQ = q; bestIdx = k; }
+        });
+      }
+      if (!best) break;
+      picked.push(bestQ.splice(bestIdx, 1)[0]);
+      if (limit != null) break;   // 상한을 지켜야 할 땐 한 개씩 보태며 확인한다
     }
-    return best ? bestQ.splice(bestIdx, 1)[0] : null;
+    return picked.length ? picked : null;
   };
 
   // 모자라면 남은 풀에서 본운동을 더 채운다. 여기서는 softMax 를 지킨다.
   let guard = 0;
   while (now() < targetSec && guard++ < 400) {
-    let picked = null;
-    for (const q of fillOrder) {
-      const idx = q.findIndex(c => now() + cost(c) <= softMax);
-      if (idx !== -1) { picked = q.splice(idx, 1)[0]; break; }
-    }
-    if (!picked) break;
-    mainClips.push(picked);
+    const unit = takeUnit(softMax);
+    if (!unit) break;
+    mainUnits.push(unit);
   }
 
-  // 넘치면 본운동 뒤쪽부터 덜어낸다. 단 목표 아래로 떨어뜨리면서까지 덜지는 않는다.
-  while (now() > softMax && mainClips.length > 1) {
-    const without = planSeconds(
-      warmupClips, mainClips.slice(0, -1), coolClips, mainSets, restBetweenSets, restAfter, restScale);
-    if (without < targetSec) break;
-    mainClips.pop();
+  // 넘치면 뒤에서부터 덜어낸다. 묶음을 통째로 빼면 한 번에 너무 많이 줄어드니
+  // 먼저 마지막 묶음 안의 동작을 하나씩 빼고, 그래도 넘치면 묶음을 뺀다.
+  // 어느 쪽이든 목표 아래로 떨어뜨리면서까지 덜지는 않는다.
+  const plan = units => planSeconds(warmupClips, units, coolClips,
+    mainSets, restBetweenSets, restAfter, restScale, restWithin);
+  let trimGuard = 0;
+  while (now() > softMax && trimGuard++ < 400) {
+    const last = mainUnits[mainUnits.length - 1];
+    if (last && last.length > 1) {
+      const trial = [...mainUnits.slice(0, -1), last.slice(0, -1)];
+      if (plan(trial) < targetSec) break;
+      mainUnits = trial;
+      continue;
+    }
+    if (mainUnits.length <= 1) break;
+    const without = mainUnits.slice(0, -1);
+    if (plan(without) < targetSec) break;
+    mainUnits = without;
   }
 
   // 아직 크게 모자라면 동작을 더 넣어 메운다. 휴식만 늘리면 운동이 아니라
   // 쉬는 시간이 길어질 뿐이라, 1분 반이 넘는 구멍은 동작으로 채운다.
-  const REST_PATCH_MAX = 90;
   guard = 0;
-  while (now() + REST_PATCH_MAX < targetSec && guard++ < 400) {
-    const picked = takeShortest(null);
-    if (!picked) break;
-    mainClips.push(picked);
+  while (now() + 90 < targetSec && guard++ < 400) {
+    const unit = takeUnit(null);
+    if (!unit) break;
+    mainUnits.push(unit);
   }
 
   // 남은 자투리는 동작 사이 휴식으로 맞춘다.
   // 기준 휴식을 1초 올리면 실제로는 배수의 합만큼 늘어나므로 그걸로 나눈다.
-  const scaleSum = () => mainClips.reduce(
-    (n, c) => n + (restScale[c.code] == null ? 1 : restScale[c.code]), 0);
+  const scaleSum = () => mainUnits.reduce((n, u) => {
+    const m = restScale[u[0]?.code];
+    return n + (m == null ? 1 : m);
+  }, 0);
   const padRest = () => {
     const per = scaleSum();
     if (!(per > 0) || now() >= targetSec) return;
@@ -366,28 +432,29 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   padRest();
 
   // 풀이 비어 그래도 모자라면 세트를 늘린다.
-  // 한 번 늘리면 모든 동작이 같이 늘어 크게 넘칠 수 있으니, 넘치는 폭이
-  // 목표+10분 안에 들어올 때만 쓴다. 넘친다면 아래에서 동작을 하나씩 더해
-  // 잘게 맞추는 편이 낫다.
+  // 한 번 늘리면 모든 묶음이 같이 늘어 크게 넘칠 수 있으니, 넘치는 폭이
+  // 목표+10분 안에 들어올 때만 쓴다.
   while (now() < targetSec && mainSets < 6) {
-    const bumped = planSeconds(
-      warmupClips, mainClips, coolClips, mainSets + 1, restBetweenSets, restAfter, restScale);
+    const bumped = planSeconds(warmupClips, mainUnits, coolClips,
+      mainSets + 1, restBetweenSets, restAfter, restScale, restWithin);
     if (bumped > targetSec + 10 * 60) break;
     mainSets += 1;
   }
 
   padRest();
 
-  // 라이브러리가 너무 작아 더 넣을 게 없으면 쓰던 동작을 다시 돌린다.
-  // 이때도 코어를 먼저 돌려 같은 근력 동작이 반복되는 것을 피한다.
-  if (now() < targetSec && mainClips.length > 0) {
+  // 라이브러리가 너무 작아 더 넣을 게 없으면 쓰던 묶음을 다시 돌린다.
+  // 이때도 코어가 든 묶음을 먼저 돌려 같은 근력만 반복되는 것을 피한다.
+  if (now() < targetSec && mainUnits.length > 0) {
     const coreCodes = ['CCS', 'CCB'];
-    const cycle = [...mainClips.filter(c => coreCodes.includes(c.code)), ...mainClips];
+    // 묶음째로 밀어 넣으면 한 번에 너무 많이 늘어난다. 동작 하나씩 보탠다.
+    const flat = mainUnits.flat();
+    const cycle = [...flat.filter(c => coreCodes.includes(c.code)), ...flat];
     let k = 0, repeatGuard = 0;
-    while (now() < targetSec && repeatGuard++ < 400) mainClips.push(cycle[k++ % cycle.length]);
+    while (now() < targetSec && repeatGuard++ < 400) mainUnits.push([cycle[k++ % cycle.length]]);
   }
 
-  mainClips = avoidConsecutiveSamePart(mainClips);
+  mainClips = mainUnits.flat();
 
   const estimatedSeconds = now();
   const rationale = buildRationale({
@@ -399,6 +466,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     method,
     warmupClips,
     mainClips,
+    mainUnits,
+    groupSize,
+    restWithin,
     coolClips,
     mainSets,
     restBetweenSets,
