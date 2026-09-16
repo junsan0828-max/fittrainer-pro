@@ -1,9 +1,13 @@
 // 폰 페이지를 실제 브라우저로 띄워 본다. PC 앱과 달리 여긴 테스트가 없었다.
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
-const html = fs.readFileSync('/home/user/-/fittrainer-pro/mobile/index.html', 'utf8');
+// 저장소 어디에 두고 돌리든 같은 파일을 읽어야 한다
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const html = fs.readFileSync(path.join(root, 'mobile', 'index.html'), 'utf8');
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/socket.io')) {   // 서버가 없으니 붙지 않는 게 정상
     res.writeHead(404); return res.end();
