@@ -284,7 +284,6 @@ button{font-family:inherit;cursor:pointer;border:none;color:var(--text)}
     <input class="search" id="bl-search" placeholder="동작 이름 검색">
     <div id="bl-lib"></div>
   </div>
-</div>
 
   <!-- 설정 -->
   <div class="screen" id="sc-settings" hidden>
@@ -640,16 +639,25 @@ $('prog-list').addEventListener('click', e => {
 function renderBuilder(s) {
   const blocks = s.blocks || [];
   const PHASE = { warmup: '준비', main: '본운동', cooldown: '정리' };
-  $('bl-count').textContent = `시퀀스 · ${blocks.length}개 동작`
+  const moveCount = blocks.reduce((n, b) => n + (b.clips?.length || 1), 0);
+  $('bl-count').textContent = `시퀀스 · ${moveCount}개 동작`
     + (s.totalSeconds ? ` · 약 ${human(s.totalSeconds)}` : '');
   $('bl-list').innerHTML = blocks.length ? blocks.map((b, i) => {
-    const c = b.clip || {};
+    const list = b.clips?.length ? b.clips : [b.clip || {}];
+    const c = list[0] || {};
+    const grouped = list.length > 1;
     const [, color] = CAT[c.code] || [, '#7A7A86'];
+    const title = grouped
+      ? list.map(x => x?.name || x?.fileName || '—').join(' → ')
+      : (c.name || c.fileName || '—');
+    const sub = grouped
+      ? `${PHASE[b.phase] || ''} · 묶음 ${list.length}동작`
+      : [PHASE[b.phase], c.part].filter(Boolean).join(' · ');
     return `<div class="card col" data-uid="${b.uid}">
       <div class="head">
         <span class="chip" style="background:${color}22;color:${color}">${c.code || '?'}</span>
-        <div class="nm"><b>${c.name || c.fileName || '—'}</b>
-          <small>${[PHASE[b.phase], c.part].filter(Boolean).join(' · ')}</small></div>
+        <div class="nm"><b>${title}</b>
+          <small>${sub}</small></div>
       </div>
       <div class="acts">
         <button class="icon-btn" data-act="sets-">−</button>
@@ -909,7 +917,9 @@ function render(s) {
       (c.code ? `<span class="chip" style="background:${color}22;color:${color}">${label || c.code}</span>` : '')
       + (c.part ? `<span>${c.part}</span>` : '')
       + (c.reps ? `<span>${c.reps}회</span>` : '')
-      + (cur.totalSets > 1 ? `<span>세트 ${cur.setNum}/${cur.totalSets}</span>` : '');
+      + (cur.partTotal > 1 ? `<span>묶음 ${cur.partNum}/${cur.partTotal}</span>` : '')
+      + (cur.totalSets > 1
+          ? `<span>${cur.partTotal > 1 ? '라운드' : '세트'} ${cur.setNum}/${cur.totalSets}</span>` : '');
   } else if (cur?.type === 'break') {
     $('now-lab').textContent = '시퀀스 간 휴식';
     $('now-title').textContent = mmss(tick.restCountdown ?? cur.duration);
@@ -955,7 +965,8 @@ function render(s) {
     }
     if (it.type === 'rest') {
       return `<div class="item rest ${cls}" data-i="${i}"><span class="idx">·</span>
-        <span class="nm">${it.restKind === 'set' ? '세트 휴식' : '전환 휴식'} ${it.duration}초</span></div>`;
+        <span class="nm">${it.restKind === 'within' ? '묶음 안 전환'
+          : it.restKind === 'set' ? '세트 휴식' : '전환 휴식'} ${it.duration}초</span></div>`;
     }
     const c = it.clip || {};
     const [, color] = CAT[c.code] || [, '#7A7A86'];

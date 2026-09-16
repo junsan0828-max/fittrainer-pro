@@ -1976,7 +1976,9 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
                   <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
-                    {ses.blocks.length}개 동작 · 약 {humanTime(secs)}
+                    {ses.blocks.reduce((n, b) => n + blockClips(b).length, 0)}개 동작
+                    {ses.blocks.some(b => blockClips(b).length > 1) && ' · 묶음 포함'}
+                    {' · 약 '}{humanTime(secs)}
                     {broken > 0 && (
                       <span style={{ color: '#F87171', marginLeft: 6 }}>
                         · 영상 {broken}개 없음
