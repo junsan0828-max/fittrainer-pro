@@ -11,14 +11,14 @@
 //   2. 넘치더라도 목표 + 10분 안이다. 영상이 길면(150초짜리를 3세트 하면
 //      한 동작에 9분이 넘는다) 마지막 한 동작 때문에 구조적으로 넘칠 수 있다.
 
-import { composeProgram, CONCEPT_MAP, restAfterFor } from '../renderer/src/composeProgram.js';
+import { composeProgram, CONCEPT_MAP, restAfterFor, withinGaps } from '../renderer/src/composeProgram.js';
 
 // 재생 큐가 실제로 쓰는 계산. App.jsx 의 expandToQueue + itemSeconds 와 같은 규칙이다.
 function actualSeconds(blocks) {
   return blocks.reduce((t, b) => {
     const list = b.clips?.length ? b.clips : [b.clip];
     const round = list.reduce((n, c) => n + (c?.duration || 0), 0)
-      + (b.restWithin || 0) * (list.length - 1);
+      + (b.gaps || []).reduce((n, g) => n + g, 0);
     return t + round * b.sets + b.restBetweenSets * (b.sets - 1) + b.restAfter;
   }, 0);
 }
@@ -26,7 +26,7 @@ function actualSeconds(blocks) {
 // App.jsx 의 blocksFromPlan 과 같은 방식이어야 한다
 function toBlocks(r) {
   const single = (list, phase) => list.map(clip => ({
-    clip, clips: [clip], phase, sets: 1, restBetweenSets: 10, restWithin: 0,
+    clip, clips: [clip], phase, sets: 1, restBetweenSets: 10, gaps: [],
     restAfter: phase === 'warmup' ? 10 : 15,
   }));
   const units = r.mainUnits || r.mainClips.map(c => [c]);
@@ -34,7 +34,7 @@ function toBlocks(r) {
     clip: unit[0], clips: unit, phase: 'main',
     sets: r.mainSets,
     restBetweenSets: r.restBetweenSets,
-    restWithin: unit.length > 1 ? (r.restWithin || 0) : 0,
+    gaps: unit.length > 1 ? withinGaps(unit, r.restWithin || 0, r.restScale) : [],
     restAfter: restAfterFor(unit[0], r.restAfter, r.restScale),
   }));
   return [...single(r.warmupClips, 'warmup'), ...main, ...single(r.coolClips, 'cooldown')];
@@ -123,6 +123,60 @@ const CORE = ['CCS', 'CCB'];
   const ok = restMax <= 120 && dupAvg <= 0.5 && corePct >= 30;
   console.log(`\n${ok ? '  OK' : 'FAIL'}  시간을 채우는 재료 — `
     + `코어 ${corePct.toFixed(0)}% · 휴식 최대 ${restMax}초 · 중복 ${dupAvg.toFixed(2)}개`);
+}
+
+// ---- 묶음 안 전환 시간 ----
+// 한 라운드 안이라고 30초, 30초 똑같이 쉴 이유는 없다.
+// 방금 끝낸 동작이 근력이냐 폼롤링이냐에 따라 달라야 한다.
+{
+  const clips = lib(200, i => 40 + (i % 21));
+  let variedPrograms = 0, programs = 0, minGap = Infinity, maxGap = 0;
+  const byCode = new Map();
+  for (const con of Object.values(CONCEPT_MAP)) {
+    for (let k = 0; k < RUNS; k++) {
+      const r = composeProgram({ enrichedClips: clips, customer: {},
+        sessionCfg: { duration: 45, groupSize: 3, includeCats: con.cats,
+                      focus: con.focus, method: con.method } });
+      // 묶음이 2개로 줄면 한 묶음에 전환이 하나뿐이라, 시퀀스 전체를 놓고 본다
+      const all = [];
+      for (const u of r.mainUnits) {
+        if (u.length < 2) continue;
+        const g = withinGaps(u, r.restWithin, r.restScale);
+        g.forEach((v, idx) => {
+          all.push(v);
+          minGap = Math.min(minGap, v);
+          maxGap = Math.max(maxGap, v);
+          const code = u[idx].code;
+          if (!byCode.has(code)) byCode.set(code, new Set());
+          byCode.get(code).add(v);
+        });
+      }
+      if (all.length < 2) continue;
+      programs++;
+      if (new Set(all).size > 1) variedPrograms++;
+    }
+  }
+  const pct = programs ? (variedPrograms / programs) * 100 : 0;
+
+  // 지켜야 할 성질은 둘이다.
+  //  - 같은 종류는 늘 같은 값이다(배수로 정해진다는 뜻).
+  //  - 종류가 다르면 값도 다르다.
+  // 시퀀스마다 값이 여러 가지인지는 컨셉에 달렸다. 회복 컨셉처럼 스트레칭과
+  // 폼롤링만 나오면 값이 같은 게 오히려 맞다. 그래서 비율은 참고만 한다.
+  const unstable = [...byCode.entries()].filter(([, v]) => v.size > 1).map(([c]) => c);
+  const distinct = new Set([...byCode.values()].flatMap(v => [...v])).size;
+
+  if (unstable.length)
+    failures.push(`같은 종류인데 전환이 들쭉날쭉하다 — ${unstable.join(', ')}`);
+  if (distinct < 4)
+    failures.push(`종류가 달라도 전환이 같다 — 서로 다른 값이 ${distinct}가지뿐`);
+  // 전환이 너무 길면 묶음이 아니라 그냥 따로 하는 것과 같다
+  if (maxGap > 30) failures.push(`묶음 안 전환이 너무 길다 — 최대 ${maxGap}초`);
+  if (minGap < 5) failures.push(`묶음 안 전환이 너무 짧다 — 최소 ${minGap}초`);
+
+  const ok = !unstable.length && distinct >= 4 && maxGap <= 30 && minGap >= 5;
+  console.log(`${ok ? '  OK' : 'FAIL'}  묶음 안 전환 — `
+    + `${minGap}~${maxGap}초 · 종류별 ${distinct}가지 값 · 시퀀스의 ${pct.toFixed(0)}%가 섞어 씀`);
 }
 
 if (failures.length) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CATS, CAT_MAP, TRAINING_METHODS, CONCEPTS, CONCEPT_MAP, composeProgram,
-         REST_SCALE_DEFAULT, restAfterFor } from './composeProgram';
+         REST_SCALE_DEFAULT, restAfterFor, withinGaps } from './composeProgram';
 
 const T = {
   bg: '#0A0A0C', surface: '#111114', panel: '#17171B', border: '#222228',
@@ -1084,7 +1084,7 @@ function Section({ label, children }) {
   );
 }
 
-function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
+function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab, restScale }) {
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
   const [dragIdx, setDragIdx] = useState(null);
@@ -1114,9 +1114,12 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
         return prev;
       }
       const clips = [...blockClips(above), ...blockClips(cur)];
+      const base = above.restWithin || 10;
       const merged = {
         ...above, clips, clip: clips[0],
-        restWithin: above.restWithin || 10,
+        restWithin: base,
+        // 전환 시간은 방금 끝낸 동작 종류를 따른다
+        gaps: withinGaps(clips, base, restScale),
       };
       const next = [...prev.slice(0, idx - 1), merged, ...prev.slice(idx + 1)];
       saveData('ft_blocks', next);
@@ -1131,7 +1134,7 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
       const list = blockClips(b);
       if (list.length < 2) return prev;
       const parts = list.map(clip => ({
-        ...b, uid: uid(), clip, clips: [clip], restWithin: 0,
+        ...b, uid: uid(), clip, clips: [clip], restWithin: 0, gaps: [],
       }));
       const next = [...prev.slice(0, idx), ...parts, ...prev.slice(idx + 1)];
       saveData('ft_blocks', next);
@@ -1165,9 +1168,8 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab }) {
   const catCounts = {};
   blocks.forEach(b => { catCounts[b.clip?.code] = (catCounts[b.clip?.code] || 0) + 1; });
   const blockSec = (b) => {
-    const list = blockClips(b);
-    const round = list.reduce((n, c) => n + (c?.duration || 60), 0)
-      + (b.restWithin || 0) * (list.length - 1);
+    const round = blockClips(b).reduce((n, c) => n + (c?.duration || 60), 0)
+      + blockGaps(b).reduce((n, g) => n + g, 0);
     return round * b.sets + (b.sets - 1) * b.restBetweenSets + b.restAfter;
   };
   const totalSec = blocks.reduce((s, b) => s + blockSec(b), 0);
@@ -1389,11 +1391,20 @@ function blockClips(block) {
   return block.clips?.length ? block.clips : [block.clip];
 }
 
+// 라운드 안 전환 시간 목록. 예전에 만든 블록은 하나의 값만 갖고 있으므로
+// 그때는 그 값을 그대로 쓴다.
+function blockGaps(block) {
+  const list = blockClips(block);
+  if (list.length < 2) return [];
+  if (block.gaps?.length === list.length - 1) return block.gaps;
+  return Array(list.length - 1).fill(block.restWithin || 0);
+}
+
 function expandToQueue(blocks, sessionName) {
   const q = [];
   blocks.forEach(block => {
     const list = blockClips(block);
-    const within = block.restWithin || 0;
+    const gaps = blockGaps(block);
     for (let s = 1; s <= block.sets; s++) {
       list.forEach((clip, k) => {
         q.push({
@@ -1402,8 +1413,8 @@ function expandToQueue(blocks, sessionName) {
           groupName: list.length > 1 ? list.map(c => c?.name).filter(Boolean).join(' + ') : '',
         });
         // 라운드 안 전환은 짧게. 묶음은 이어서 가는 맛이라 길면 의미가 없다.
-        if (k < list.length - 1 && within > 0)
-          q.push({ type: 'rest', restKind: 'within', duration: within, sessionName });
+        if (k < list.length - 1 && gaps[k] > 0)
+          q.push({ type: 'rest', restKind: 'within', duration: gaps[k], sessionName });
       });
       if (s < block.sets)
         q.push({ type: 'rest', restKind: 'set', duration: block.restBetweenSets, sessionName });
@@ -1523,6 +1534,8 @@ function blocksFromPlan(r) {
     sets: r.mainSets,
     restBetweenSets: r.restBetweenSets,
     restWithin: unit.length > 1 ? (r.restWithin || 0) : 0,
+    // 라운드 안 전환은 방금 끝낸 동작마다 다르다
+    gaps: unit.length > 1 ? withinGaps(unit, r.restWithin || 0, r.restScale) : [],
     restAfter: restAfterFor(unit[0], r.restAfter, r.restScale),
   }));
   return [...single(r.warmupClips, 'warmup'), ...main, ...single(r.coolClips, 'cooldown')];
@@ -3257,7 +3270,8 @@ export default function App() {
             clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
         )}
         {tab === 'builder' && (
-          <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
+          <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks}
+            setTab={setTab} restScale={settings.restScale || REST_SCALE_DEFAULT} />
         )}
         {tab === 'queue' && (
           <QueueTab sessions={hydratedSessions} setSessions={setSessions}

@@ -95,10 +95,18 @@ export function blockSeconds(clip, phase, mainSets, restBetweenSets, restAfter, 
 // 묶음이 끝나면 대표 동작 기준의 동작 휴식을 준다.
 export function unitSeconds(unit, mainSets, restBetweenSets, restAfter, restWithin, scale) {
   const list = Array.isArray(unit) ? unit : [unit];
-  const round = list.reduce((n, c) => n + clipSec(c), 0) + restWithin * (list.length - 1);
+  const work = list.reduce((n, c) => n + clipSec(c), 0);
+  const round = work + withinGaps(list, restWithin, scale).reduce((n, g) => n + g, 0);
   return round * mainSets
     + restBetweenSets * (mainSets - 1)
     + restAfterFor(list[0], restAfter, scale);
+}
+
+// 묶음 안 전환 시간. 라운드 안이라고 다 같은 시간을 쉴 이유는 없다.
+// 방금 끝낸 동작이 무엇이었느냐로 정한다 — 로우 뒤에는 조금 쉬고,
+// 폼롤링 뒤에는 바로 넘어간다. 동작 뒤 휴식과 같은 배수를 쓴다.
+export function withinGaps(clips, restWithin, scale) {
+  return clips.slice(0, -1).map(c => restAfterFor(c, restWithin, scale));
 }
 
 function planSeconds(warmupClips, mainUnits, coolClips, mainSets, restBetweenSets, restAfter, scale, restWithin) {
@@ -327,8 +335,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const targetSec = dur * 60;
   const softMax = targetSec + 5 * 60;
   const restBetweenSets = intSettings.rest;
-  // 라운드 안 전환은 세트 휴식의 절반. 묶음은 이어서 가는 맛이라 길면 의미가 없다.
-  const restWithin = Math.max(5, Math.round(intSettings.rest / 2));
+  // 라운드 안 전환의 기준값. 묶음은 이어서 가는 맛이라 세트 휴식보다 짧아야 하지만,
+  // 너무 낮으면 종류별 배수를 곱해도 전부 하한 5초에 몰려 다시 균일해진다.
+  const restWithin = Math.max(8, Math.round(intSettings.rest * 0.75));
   let restAfter = intSettings.restAfter;
   const restScale = sessionCfg.restScale || REST_SCALE_DEFAULT;
 
