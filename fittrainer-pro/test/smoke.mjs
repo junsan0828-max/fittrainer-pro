@@ -131,7 +131,7 @@ await page.goto(base, { waitUntil: 'networkidle' });
 const rendered = await page.evaluate(() => document.getElementById('root')?.children.length ?? 0);
 if (rendered === 0) failures.push('root 가 비어 있습니다 — 화면이 렌더되지 않았습니다');
 
-const TABS = ['라이브러리', '고객', '시퀀스 설정', '시퀀스 빌더', '시퀀스 목록', '재생', '기록', '설정'];
+const TABS = ['라이브러리', '고객', '시퀀스 만들기', '시퀀스 목록', '재생', '기록', '설정'];
 for (const label of TABS) {
   const before = failures.length;
   try {
@@ -218,10 +218,73 @@ async function checkRestScale() {
 }
 await checkRestScale();
 
+// 만들기 → 목록으로 넘기기 → 목록에서 날짜·구성 확인
+async function checkComposeFlow() {
+  const before = failures.length;
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[흐름] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+
+  await page.getByRole('button', { name: '시퀀스 만들기', exact: true }).first().click();
+  await page.waitForTimeout(300);
+
+  await step('자동·직접 두 방식을 고를 수 있다', async () => {
+    for (const label of ['자동 구성', '직접 구성']) {
+      if (await page.getByRole('button', { name: label, exact: true }).count() === 0)
+        throw new Error(`'${label}' 없음`);
+    }
+  });
+
+  await step('자동 구성에 조건과 컨셉이 함께 있다', async () => {
+    await page.getByRole('button', { name: '자동 구성', exact: true }).first().click();
+    await page.waitForTimeout(250);
+    const txt = await page.locator('#root').innerText();
+    for (const want of ['운동 시간', '강도', '집중 부위', '전신 근력']) {
+      if (!txt.includes(want)) throw new Error(`'${want}' 없음`);
+    }
+  });
+
+  await step('작업대의 구성을 목록으로 넘길 수 있다', async () => {
+    const btn = page.getByRole('button', { name: '목록으로 보내기', exact: true }).first();
+    if (await btn.count() === 0) throw new Error('보내기 버튼이 없음');
+    await page.locator('input[aria-label="시퀀스 이름"]').fill('테스트 시퀀스');
+    await btn.click();
+    await page.waitForTimeout(400);
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('목록에 넣었습니다')) throw new Error('보낸 뒤 안내가 없음');
+  });
+
+  await step('목록에 만든 날짜가 보인다', async () => {
+    await page.getByRole('button', { name: '시퀀스 목록', exact: true }).first().click();
+    await page.waitForTimeout(350);
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('테스트 시퀀스')) throw new Error('넘긴 시퀀스가 목록에 없음');
+    if (!/오늘 \d\d:\d\d/.test(txt)) throw new Error('만든 날짜 표시가 없음');
+  });
+
+  await step('눌러서 구성 내용을 볼 수 있다', async () => {
+    await page.getByText('테스트 시퀀스', { exact: false }).first().click();
+    await page.waitForTimeout(300);
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('눌러서 접기')) throw new Error('구성이 펼쳐지지 않음');
+  });
+
+  await step('목록에서는 더 이상 만들지 않는다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (txt.includes('+ 전신 근력'))
+      throw new Error('목록에 만들기 버튼이 남아 있음');
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  만들기 → 목록 흐름`);
+}
+await checkComposeFlow();
+
 // 시퀀스 빌더: 묶음 표시와 묶기/풀기
 async function checkGrouping() {
   const before = failures.length;
-  await page.getByRole('button', { name: '시퀀스 빌더', exact: true }).first().click();
+  await page.getByRole('button', { name: '시퀀스 만들기', exact: true }).first().click();
+  await page.waitForTimeout(250);
+  await page.getByRole('button', { name: '직접 구성', exact: true }).first().click();
   await page.waitForTimeout(350);
   const step = async (what, fn) => {
     try { await fn(); } catch (e) { failures.push(`[빌더] ${what}: ${e.message.split('\n')[0]}`); }
@@ -250,7 +313,7 @@ async function checkGrouping() {
     if (txt.includes('묶음 2동작')) throw new Error('풀었는데 묶음이 남아 있음');
   });
 
-  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  빌더 · 동작 묶기/풀기`);
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  만들기 · 동작 묶기/풀기`);
 }
 await checkGrouping();
 
@@ -262,4 +325,4 @@ if (failures.length) {
   for (const f of failures) console.error('  - ' + f);
   process.exit(1);
 }
-console.log('\n스모크 테스트 통과 — 8개 탭 모두 정상');
+console.log('\n스모크 테스트 통과 — 모든 탭 정상');

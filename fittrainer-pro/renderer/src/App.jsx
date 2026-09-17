@@ -7,6 +7,19 @@ const T = {
   text: '#EBEBEF', dim: '#60606A', dimMid: '#404048', accent: '#7C3AED',
 };
 
+// 만든 날짜. 오늘·어제는 말로 적는 편이 알아보기 쉽다.
+function fmtDate(ms) {
+  if (!ms) return '';
+  const d = new Date(ms), now = new Date();
+  const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (diff === 0) return `오늘 ${hm}`;
+  if (diff === 1) return `어제 ${hm}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+}
+
 function fmtSec(s) {
   const m = Math.floor(s / 60), ss = s % 60;
   return m > 0 ? `${m}:${String(ss).padStart(2,'0')}` : `${ss}s`;
@@ -310,8 +323,7 @@ function TabBar({ tab, setTab, alert }) {
   const tabs = [
     { id: 'library', label: '라이브러리' },
     { id: 'customers', label: '고객' },
-    { id: 'session', label: '시퀀스 설정' },
-    { id: 'builder', label: '시퀀스 빌더' },
+    { id: 'compose', label: '시퀀스 만들기' },
     { id: 'queue', label: '시퀀스 목록' },
     { id: 'player', label: '재생' },
     { id: 'history', label: '기록' },
@@ -750,7 +762,7 @@ function CustomersTab({ customers, setCustomers, setTab, setActiveCustomer, setS
       intensity: preset.intensity || prev.intensity,
       method: preset.method || prev.method,
     }));
-    setTab('session');
+    setTab('compose');
   }
 
   return (
@@ -958,123 +970,6 @@ function RemotePanel({ embedded }) {
   );
 }
 
-function SessionTab({ customer, sessionCfg, setSessionCfg, clips, clipAttrs, blocks, setBlocks, setTab }) {
-  const [lastMethod, setLastMethod] = useState('');
-  const [lastRationale, setLastRationale] = useState('');
-
-  function toggle(field, val) {
-    setSessionCfg(prev => ({ ...prev, [field]: prev[field] === val ? '' : val }));
-  }
-  function toggleArr(field, val) {
-    setSessionCfg(prev => {
-      const cur = prev[field] || [];
-      return { ...prev, [field]: cur.includes(val) ? cur.filter(v => v !== val) : [...cur, val] };
-    });
-  }
-
-  function getEnrichedClips() {
-    return clips.map(c => {
-      const attrs = clipAttrs[c.filePath] || clipAttrs[c.id] || {};
-      return { ...c, ...attrs };
-    });
-  }
-
-  function generateRuleBased() {
-    const enriched = getEnrichedClips();
-    const r = composeProgram({ enrichedClips: enriched, customer, sessionCfg });
-    const { warmupClips, mainClips, coolClips, method, rationale } = r;
-
-    if (warmupClips.length + mainClips.length + coolClips.length === 0) {
-      alert(explainEmptyPool(enriched, sessionCfg));
-      return;
-    }
-
-    const newBlocks = blocksFromPlan(r);
-
-    setBlocks(newBlocks);
-    saveData('ft_blocks', newBlocks);
-    setLastMethod(method);
-    setLastRationale(rationale);
-    setTab('builder');
-  }
-
-
-  return (
-    <div style={{ padding: 24, maxWidth: 700, margin: '0 auto', overflowY: 'auto', height: '100%' }}>
-      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>시퀀스 설정</div>
-      {customer && (
-        <div style={{ fontSize: 13, color: T.dim, marginBottom: 12, background: T.surface, padding: '8px 12px', borderRadius: 6, border: `1px solid ${T.border}` }}>
-          <span style={{ color: T.text, fontWeight: 600 }}>{customer.name}</span>
-          {' · '}{customer.goal || '-'} · {customer.experience?.split(' ')[0] || '-'}
-          {customer.injuries?.length > 0 && <span style={{ color: '#E84040', marginLeft: 8 }}>부상: {customer.injuries.join(', ')}</span>}
-          {GOAL_SESSION[customer.goal] && (
-            <span style={{ marginLeft: 10, fontSize: 11, color: T.accent }}>
-              → 강도: {GOAL_SESSION[customer.goal].intensity} · 기법: {TRAINING_METHODS.find(m => m.code === GOAL_SESSION[customer.goal].method)?.label?.split(' ')[0]} 자동 설정됨
-            </span>
-          )}
-        </div>
-      )}
-
-      <Section label="운동 시간 (분)">
-        <ChipGroup items={DURATIONS.map(d=>({value:String(d),label:`${d}분`}))} selected={String(sessionCfg.duration)}
-          onToggle={v=>toggle('duration',Number(v))} />
-      </Section>
-      <Section label="강도">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {INTENSITIES.map(v => (
-            <div key={v} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              <Chip label={v} active={sessionCfg.intensity === v} onClick={() => toggle('intensity', v)} />
-              <span style={{ fontSize: 10, color: T.dim }}>{INTENSITY_RPE[v]}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
-      <Section label="집중 부위">
-        <ChipGroup items={FOCUS_OPTIONS} selected={sessionCfg.focus} onToggle={v=>toggle('focus',v)} />
-      </Section>
-      <Section label="컨디션">
-        <ChipGroup items={CONDITIONS} selected={sessionCfg.condition} onToggle={v=>toggle('condition',v)} />
-      </Section>
-      <Section label="사용 카테고리">
-        <ChipGroup items={CATS} selected={sessionCfg.includeCats} multi
-          colorMap={Object.fromEntries(CATS.map(c=>[c.code,c.color]))}
-          onToggle={v=>toggleArr('includeCats',v)} />
-      </Section>
-      <Section label="구성 기법">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {TRAINING_METHODS.map(m => (
-            <Chip key={m.code} label={m.label}
-              active={(sessionCfg.method || 'auto') === m.code}
-              onClick={() => setSessionCfg(prev => ({ ...prev, method: m.code }))} />
-          ))}
-        </div>
-      </Section>
-
-      {lastRationale && (
-        <div style={{ fontSize: 12, color: T.text, background: T.panel, border: `1px solid ${T.border}`,
-          borderRadius: 8, padding: 10, marginBottom: 12, lineHeight: 1.5 }}>
-          <span style={{ color: T.dim }}>마지막 생성 — </span>{lastRationale}
-        </div>
-      )}
-
-      <div style={{ marginTop: 8, marginBottom: 12, fontSize: 12, color: T.dim }}>
-        원격 조작 설정은 <b style={{ color: T.text }}>설정</b> 탭에 있습니다.
-      </div>
-
-      <div style={{ display: 'flex', gap: 10, marginTop: 20, flexWrap: 'wrap' }}>
-        <button onClick={generateRuleBased} style={{
-          flex: 1, minWidth: 160, padding: '12px 20px', background: T.accent, color: '#fff',
-          borderRadius: 8, fontSize: 14, fontWeight: 600,
-        }}>자동 조합</button>
-        <button onClick={() => setTab('builder')} style={{
-          flex: 1, minWidth: 120, padding: '12px 20px', background: T.panel, color: T.text,
-          borderRadius: 8, fontSize: 14, border: `1px solid ${T.border}`,
-        }}>직접 조립하기</button>
-      </div>
-    </div>
-  );
-}
-
 function Section({ label, children }) {
   return (
     <div style={{ marginBottom: 16 }}>
@@ -1084,10 +979,29 @@ function Section({ label, children }) {
   );
 }
 
-function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab, restScale }) {
+// 시퀀스를 만드는 곳. 조건을 주고 자동으로 짜거나, 라이브러리에서 직접 고른다.
+// 둘 다 같은 작업대에 쌓이고, 다 되면 목록으로 넘긴다.
+function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale,
+                     customer, sessionCfg, setSessionCfg, onCompose, onSendToList }) {
+  const [mode, setMode] = useState(() => loadLS('ft_compose_mode', 'auto'));
   const [catFilter, setCatFilter] = useState('');
   const [search, setSearch] = useState('');
   const [dragIdx, setDragIdx] = useState(null);
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+
+  const pickMode = m => { setMode(m); saveLS('ft_compose_mode', m); };
+
+  function toggleCfg(field, val) {
+    setSessionCfg(prev => ({ ...prev, [field]: prev[field] === val ? '' : val }));
+  }
+  function toggleCfgArr(field, val) {
+    setSessionCfg(prev => {
+      const cur = prev[field] || [];
+      return { ...prev, [field]: cur.includes(val) ? cur.filter(v => v !== val) : [...cur, val] };
+    });
+  }
+
 
   const enriched = useMemo(() => clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) })), [clips, clipAttrs]);
 
@@ -1174,11 +1088,86 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab, restScale }) 
   };
   const totalSec = blocks.reduce((s, b) => s + blockSec(b), 0);
   const estMinutes = totalSec / 60;
+  const moveCount = blocks.reduce((n, b) => n + blockClips(b).length, 0);
+  // 이름을 안 적으면 회원과 시간으로 자동으로 붙인다
+  const defaultName = [customer?.name, `${Math.round(estMinutes)}분`]
+    .filter(Boolean).join(' · ') || `${Math.round(estMinutes)}분 시퀀스`;
+
+  function sendToList() {
+    if (blocks.length === 0) return;
+    const label = name.trim() || defaultName;
+    onSendToList(label);
+    setName('');
+    setNote(`'${label}' 을(를) 목록에 넣었습니다.`);
+    setTimeout(() => setNote(''), 4000);
+  }
   const phaseSec = phase => blocks.filter(b => b.phase === phase).reduce((s, b) => s + blockSec(b), 0);
 
   return (
     <div style={{ display: 'flex', height: '100%' }}>
-      <div style={{ width: 280, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ width: 300, borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column' }}>
+        {/* 만드는 방식을 고른다. 둘 다 같은 작업대에 쌓인다. */}
+        <div style={{ display: 'flex', padding: 8, gap: 6, borderBottom: `1px solid ${T.border}` }}>
+          {[['auto', '자동 구성'], ['manual', '직접 구성']].map(([m, label]) => (
+            <button key={m} onClick={() => pickMode(m)} style={{
+              flex: 1, padding: '9px 0', borderRadius: 7, fontSize: 13, fontWeight: 600,
+              background: mode === m ? T.accent : T.panel,
+              color: mode === m ? '#fff' : T.dim,
+              border: `1px solid ${mode === m ? T.accent : T.border}`,
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {mode === 'auto' ? (
+          <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
+            {customer && (
+              <div style={{
+                fontSize: 12, color: T.dim, marginBottom: 12, background: T.surface,
+                padding: '8px 10px', borderRadius: 6, border: `1px solid ${T.border}`,
+              }}>
+                <span style={{ color: T.text, fontWeight: 600 }}>{customer.name}</span>
+                {' · '}{customer.goal || '-'}
+                {customer.injuries?.length > 0 && (
+                  <span style={{ color: '#E84040', display: 'block', marginTop: 3 }}>
+                    부상: {customer.injuries.join(', ')}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <Section label="운동 시간 (분)">
+              <ChipGroup items={DURATIONS.map(d => ({ value: String(d), label: `${d}분` }))}
+                selected={String(sessionCfg.duration)}
+                onToggle={v => toggleCfg('duration', Number(v))} />
+            </Section>
+            <Section label="강도">
+              <ChipGroup items={INTENSITIES.map(v => ({ value: v, label: v }))}
+                selected={sessionCfg.intensity} onToggle={v => toggleCfg('intensity', v)} />
+            </Section>
+            <Section label="집중 부위">
+              <ChipGroup items={FOCUS_OPTIONS} selected={sessionCfg.focus}
+                onToggle={v => toggleCfg('focus', v)} />
+            </Section>
+            <Section label="컨디션">
+              <ChipGroup items={CONDITIONS} selected={sessionCfg.condition}
+                onToggle={v => toggleCfg('condition', v)} />
+            </Section>
+
+            <div style={{ fontSize: 12, color: T.dim, margin: '18px 0 8px', lineHeight: 1.6 }}>
+              컨셉을 누르면 위 조건으로 시퀀스가 짜여 오른쪽 작업대에 올라옵니다.
+              여러 번 눌러도 매번 다르게 나옵니다.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {CONCEPTS.map(c => (
+                <button key={c.code} onClick={() => onCompose(c.code)} style={{
+                  padding: '10px 12px', borderRadius: 7, fontSize: 13, fontWeight: 600,
+                  background: T.accent, color: '#fff', textAlign: 'left',
+                }}>+ {c.label}</button>
+              ))}
+            </div>
+          </div>
+        ) : (
+        <>
         <div style={{ padding: 8, borderBottom: `1px solid ${T.border}` }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="검색..." style={{ width: '100%', marginBottom: 6 }} />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
@@ -1204,15 +1193,33 @@ function BuilderTab({ clips, clipAttrs, blocks, setBlocks, setTab, restScale }) 
             );
           })}
         </div>
+        </>
+        )}
       </div>
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '10px 16px', display: 'flex', gap: 8, borderBottom: `1px solid ${T.border}`, alignItems: 'center' }}>
-          <span style={{ fontSize: 15, fontWeight: 700, flex: 1 }}>시퀀스 빌더</span>
-          <button onClick={() => { if (blocks.length > 0) setTab('player'); }} style={{
-            padding: '7px 16px', background: blocks.length > 0 ? T.accent : T.dimMid,
-            color: '#fff', borderRadius: 6, fontSize: 13, fontWeight: 600,
-          }}>재생</button>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>작업대</span>
+          <span style={{ fontSize: 12, color: T.dim, flex: 1 }}>
+            {blocks.length === 0 ? '왼쪽에서 만들거나 골라 담으세요'
+              : `${moveCount}개 동작 · 약 ${humanTime(totalSec)}`}
+          </span>
+          <input value={name} onChange={e => setName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && sendToList()}
+            placeholder={defaultName} aria-label="시퀀스 이름"
+            style={{ width: 190, fontSize: 12 }} />
+          <button onClick={sendToList} disabled={blocks.length === 0} style={{
+            padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600,
+            background: blocks.length > 0 ? T.accent : T.dimMid, color: '#fff',
+          }}>목록으로 보내기</button>
+        </div>
+        {note && (
+          <div style={{
+            padding: '8px 16px', fontSize: 12, color: '#22C55E',
+            background: 'rgba(34,197,94,.10)', borderBottom: `1px solid ${T.border}`,
+          }}>{note}</div>
+        )}
+        <div style={{ display: 'none' }}>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
           {blocks.length === 0 && (
@@ -1854,9 +1861,11 @@ function HistoryTab({ history, setHistory, customers }) {
 
 // 만들어진 시퀀스 목록이 곧 재생 대기열이다.
 // 체크한 것만 위에서부터 이어서 재생되고, 시퀀스 사이 간격은 각 줄에서 정한다.
-function QueueTab({ sessions, setSessions, blocks, setTab,
-                   customer, sessionCfg, onGenerate, onPlaySession, missingPaths }) {
-  const [name, setName] = useState('');
+// 만들어진 시퀀스가 모이는 곳. 여기서 오늘 돌릴 것을 고르고 순서와 간격을 정한다.
+// 만드는 일은 '시퀀스 만들기' 탭에서만 한다.
+function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }) {
+  // 펼쳐서 구성을 확인 중인 시퀀스
+  const [openId, setOpenId] = useState(null);
 
   const patch = fn => setSessions(prev => {
     const next = fn(prev); saveData('ft_sessions', next); return next;
@@ -1868,14 +1877,6 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
     () => expandPlaylist(queued).reduce((n, it) => n + itemSeconds(it), 0),
     [queued],
   );
-
-  function saveCurrent() {
-    const label = name.trim();
-    if (!label) return alert('시퀀스 이름을 입력하세요.');
-    if (blocks.length === 0) return alert('시퀀스 빌더에 동작이 없습니다.');
-    patch(prev => [...prev, { id: uid(), name: label, blocks, savedAt: Date.now() }]);
-    setName('');
-  }
 
   function move(i, dir) {
     patch(prev => {
@@ -1895,25 +1896,6 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
-
-        {/* 시퀀스 만들기 */}
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>시퀀스 만들기</div>
-        <div style={{ fontSize: 12, color: T.dim, marginBottom: 10, lineHeight: 1.6 }}>
-          {customer?.name
-            ? `${customer.name}님 기준 · ${sessionCfg?.duration || 45}분 구성`
-            : `${sessionCfg?.duration || 45}분 구성 · 고객 탭에서 회원을 고르면 조건이 반영됩니다`}
-          <br />목표 시간은 최소값입니다. 모자라지 않게 맞추므로 조금 넘을 수 있습니다.
-          <br />컨셉을 누르면 시퀀스가 만들어져 아래 목록에 추가됩니다. 여러 번 눌러도 매번 다르게 나옵니다.
-        </div>
-
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 22 }}>
-          {CONCEPTS.map(c => (
-            <button key={c.code} onClick={() => onGenerate(c.code)} style={{
-              padding: '10px 15px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-              background: T.accent, color: '#fff',
-            }}>+ {c.label}</button>
-          ))}
-        </div>
 
         {/* 목록 = 대기열 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
@@ -1973,12 +1955,22 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                 }}>{on ? order : '–'}</span>
 
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{ses.name}</div>
+                <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+                  onClick={() => setOpenId(openId === ses.id ? null : ses.id)}
+                  title="눌러서 구성 보기">
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    {ses.name}
+                    <span style={{ color: T.dim, fontWeight: 400, marginLeft: 6, fontSize: 11 }}>
+                      {openId === ses.id ? '▾' : '▸'}
+                    </span>
+                  </div>
                   <div style={{ fontSize: 11, color: T.dim, marginTop: 2 }}>
+                    {ses.savedAt && <>{fmtDate(ses.savedAt)} · </>}
                     {ses.blocks.reduce((n, b) => n + blockClips(b).length, 0)}개 동작
                     {ses.blocks.some(b => blockClips(b).length > 1) && ' · 묶음 포함'}
                     {' · 약 '}{humanTime(secs)}
+                    {ses.concept && <> · {ses.concept}</>}
+                    {ses.customerName && <> · {ses.customerName}</>}
                     {broken > 0 && (
                       <span style={{ color: '#F87171', marginLeft: 6 }}>
                         · 영상 {broken}개 없음
@@ -2002,6 +1994,43 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
                   color: T.dim, fontSize: 13, border: `1px solid ${T.border}`,
                 }}>✕</button>
               </div>
+
+              {openId === ses.id && (
+                <div style={{
+                  margin: '4px 0 6px 46px', padding: '10px 12px', borderRadius: 8,
+                  background: T.panel, border: `1px solid ${T.border}`,
+                }}>
+                  {ses.blocks.map((b, bi) => {
+                    const list = blockClips(b);
+                    const cat = CAT_MAP[list[0]?.code];
+                    return (
+                      <div key={b.uid || bi} style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        fontSize: 12, padding: '3px 0',
+                      }}>
+                        <span style={{ width: 18, color: T.dimMid, fontSize: 11 }}>{bi + 1}</span>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                          background: (cat?.color || T.dimMid) + '22', color: cat?.color || T.dim,
+                        }}>{list[0]?.code || '?'}</span>
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden',
+                          textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {list.map(c => c?.name || c?.fileName).join(' → ')}
+                        </span>
+                        {list.length > 1 && (
+                          <span style={{ fontSize: 10, color: T.accent }}>묶음 {list.length}</span>
+                        )}
+                        <span style={{ color: T.dim, fontSize: 11 }}>
+                          {b.sets > 1 ? `${b.sets}세트` : '1세트'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div style={{ fontSize: 11, color: T.dim, marginTop: 8 }}>
+                    눌러서 접기 · 고치려면 시퀀스 만들기 탭에서 새로 만드세요
+                  </div>
+                </div>
+              )}
 
               {hasNext && (
                 <div style={{
@@ -2051,21 +2080,6 @@ function QueueTab({ sessions, setSessions, blocks, setTab,
             </div>
           );
         })}
-
-        {blocks.length > 0 && (
-          <div style={{
-            display: 'flex', gap: 8, marginTop: 14, paddingTop: 14,
-            borderTop: `1px solid ${T.border}`,
-          }}>
-            <input value={name} onChange={e => setName(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && saveCurrent()}
-              placeholder="빌더의 현재 구성을 이 이름으로 저장" style={{ flex: 1, fontSize: 12 }} />
-            <button onClick={saveCurrent} style={{
-              padding: '8px 14px', borderRadius: 6, background: T.panel, color: T.text,
-              fontSize: 12, border: `1px solid ${T.border}`, whiteSpace: 'nowrap',
-            }}>저장</button>
-          </div>
-        )}
 
         {queued.length > 0 && (
           <button onClick={() => setTab('player')} style={{
@@ -2744,6 +2758,8 @@ export default function App() {
   const [blocks, setBlocks] = useState(() => loadLS('ft_blocks', []));
   const [clipAttrs, setClipAttrs] = useState(() => loadLS('ft_clip_attrs', {}));
   const [activeCustomer, setActiveCustomer] = useState(null);
+  // 마지막으로 누른 컨셉. 목록에 넘길 때 무엇으로 짰는지 남긴다.
+  const [lastConcept, setLastConcept] = useState('');
   const [analysisDone, setAnalysisDone] = useState(() => loadLS('ft_analysis_done', false));
   // 원본 경로 -> 변환된 H.264 경로
   const [playbackMap, setPlaybackMap] = useState({});
@@ -3115,6 +3131,52 @@ export default function App() {
     }
   }, [tab, playlist.length]);
 
+  // 컨셉을 눌렀을 때. 결과를 작업대(빌더)에 올린다. 목록에는 아직 안 들어간다.
+  function composeToWorkbench(code) {
+    const con = CONCEPT_MAP[code];
+    if (!con) return;
+    if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return; }
+
+    const cfg = { ...cfgWithRest, includeCats: con.cats, focus: con.focus, method: con.method };
+    const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
+
+    // 길이를 모르는 영상은 40초로 가정하고 짜기 때문에, 아직 다 못 읽은 상태로
+    // 만들면 45분짜리가 실제로는 20분대로 끝난다. 다 읽을 때까지 기다리게 한다.
+    const pool = enriched.filter(c => con.cats.includes(c.code));
+    const unknown = pool.filter(c => !(c.duration > 0)).length;
+    if (pool.length > 0 && unknown / pool.length > 0.2) {
+      alert(`영상 길이를 아직 읽는 중입니다 (${pool.length}개 중 ${unknown}개 남음).\n`
+        + '지금 만들면 시간이 목표보다 짧게 나옵니다. 잠시 후 다시 눌러 주세요.');
+      return;
+    }
+
+    const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfg });
+    if (r.warmupClips.length + r.mainClips.length + r.coolClips.length === 0) {
+      alert(explainEmptyPool(enriched, cfg));
+      return;
+    }
+    const next = blocksFromPlan(r);
+    setBlocks(next);
+    saveData('ft_blocks', next);
+    setLastConcept(con.label);
+  }
+
+  // 작업대의 구성을 이름 붙여 목록으로 넘긴다
+  function sendBlocksToList(label) {
+    if (blocks.length === 0) return;
+    const ses = {
+      id: uid(),
+      name: label,
+      concept: lastConcept || '',
+      customerName: activeCustomer?.name || '',
+      blocks,
+      savedAt: Date.now(),
+      queued: true,
+    };
+    setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
+    return ses;
+  }
+
   // 목록에서 하나만 골라 바로 재생한다. 대기열 설정은 건드리지 않는다.
   function playSession(id) {
     if (!sessions.some(x => x.id === id)) return;
@@ -3267,19 +3329,15 @@ export default function App() {
           <CustomersTab customers={customers} setCustomers={setCustomers}
             setTab={setTab} setActiveCustomer={setActiveCustomer} setSessionCfg={setSessionCfg} />
         )}
-        {tab === 'session' && (
-          <SessionTab customer={activeCustomer} sessionCfg={cfgWithRest} setSessionCfg={setSessionCfg}
-            clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks} setTab={setTab} />
-        )}
-        {tab === 'builder' && (
-          <BuilderTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks}
-            setTab={setTab} restScale={settings.restScale || REST_SCALE_DEFAULT} />
+        {tab === 'compose' && (
+          <ComposeTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks}
+            restScale={settings.restScale || REST_SCALE_DEFAULT}
+            customer={activeCustomer} sessionCfg={sessionCfg} setSessionCfg={setSessionCfg}
+            onCompose={composeToWorkbench} onSendToList={sendBlocksToList} />
         )}
         {tab === 'queue' && (
-          <QueueTab sessions={hydratedSessions} setSessions={setSessions}
-            blocks={blocks} setTab={setTab}
-            customer={activeCustomer} sessionCfg={sessionCfg}
-            onGenerate={generateConcept} onPlaySession={playSession}
+          <QueueTab sessions={hydratedSessions} setSessions={setSessions} setTab={setTab}
+            onPlaySession={playSession}
             missingPaths={missingPathSet} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
