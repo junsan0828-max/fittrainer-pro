@@ -126,6 +126,20 @@ function convert(filePath, onProgress) {
       tmp,
     ];
 
+    // 윈도우는 방금 쓴 파일을 바로 옮기지 못하는 일이 잦다.
+    // ffmpeg 가 핸들을 놓는 데 시간이 걸리거나 백신이 파일을 읽고 있으면
+    // EBUSY/EPERM 이 난다. 잠깐 기다렸다 몇 번 더 해 본다.
+    const moveWithRetry = async (from, to, tries = 6) => {
+      for (let i = 0; i < tries; i++) {
+        try { fs.renameSync(from, to); return; }
+        catch (e) {
+          const transient = e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES';
+          if (!transient || i === tries - 1) throw e;
+          await new Promise(r => setTimeout(r, 150 * (i + 1)));
+        }
+      }
+    };
+
     const proc = spawn(FFMPEG, args);
     running = proc;
     let stderr = '';
@@ -136,20 +150,25 @@ function convert(filePath, onProgress) {
     });
     proc.stderr.on('data', chunk => { stderr += chunk; });
 
+    const dropTmp = () => { try { fs.rmSync(tmp, { force: true }); } catch {} };
+
     proc.on('error', err => {
       running = null;
-      fs.rmSync(tmp, { force: true });
+      dropTmp();
       reject(err);
     });
+    // 이 콜백에서 그냥 던지면 Promise 바깥으로 새어나가 앱 전체가 죽는다.
+    // 무슨 일이 있어도 reject 로 끝낸다.
     proc.on('close', code => {
       running = null;
-      if (code === 0 && fs.existsSync(tmp)) {
-        fs.renameSync(tmp, out);
-        resolve(out);
-      } else {
-        fs.rmSync(tmp, { force: true });
-        reject(new Error(stderr.trim().split('\n').pop() || `ffmpeg 종료 코드 ${code}`));
-      }
+      (async () => {
+        if (code !== 0 || !fs.existsSync(tmp)) {
+          dropTmp();
+          throw new Error(stderr.trim().split('\n').pop() || `ffmpeg 종료 코드 ${code}`);
+        }
+        await moveWithRetry(tmp, out);
+        return out;
+      })().then(resolve, err => { dropTmp(); reject(err); });
     });
   });
 }

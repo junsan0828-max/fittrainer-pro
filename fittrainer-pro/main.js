@@ -21,6 +21,16 @@ app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
+// 배경에서 나는 오류가 앱을 통째로 죽이지 않게 한다.
+// 영상 변환처럼 뒤에서 도는 일이 실패했다고 수업 중에 창이 닫히면 안 된다.
+// 실제 문제는 각자의 자리에서 사용자에게 알리고, 여기서는 기록만 남긴다.
+process.on('uncaughtException', err => {
+  console.error('[처리되지 않은 오류]', err);
+});
+process.on('unhandledRejection', err => {
+  console.error('[처리되지 않은 거부]', err);
+});
+
 function configPath() { return path.join(app.getPath('userData'), 'ft-config.json'); }
 function loadConfig() {
   try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')); } catch { return {}; }
