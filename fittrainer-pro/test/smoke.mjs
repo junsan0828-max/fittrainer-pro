@@ -123,6 +123,8 @@ await page.addInitScript(store => {
 await page.addInitScript(clips => {
   // 라이브러리가 이미 채워진 상태로 시작시킨다
   localStorage.setItem('ft_clips', JSON.stringify(clips));
+  // 예전 버전이 저장해 둔, 지금은 없어진 탭. 업데이트한 사람의 상황을 흉내 낸다.
+  localStorage.setItem('ft_tab', JSON.stringify('builder'));
 }, CLIPS);
 
 await page.goto(base, { waitUntil: 'networkidle' });
@@ -130,6 +132,14 @@ await page.goto(base, { waitUntil: 'networkidle' });
 // 화면이 아예 안 그려졌는지부터 본다. 흰 화면 사고가 여기서 걸린다.
 const rendered = await page.evaluate(() => document.getElementById('root')?.children.length ?? 0);
 if (rendered === 0) failures.push('root 가 비어 있습니다 — 화면이 렌더되지 않았습니다');
+
+// 없어진 탭이 저장돼 있어도 빈 화면이 아니라 만들기 탭이 열려야 한다
+{
+  const txt = await page.locator('#root').innerText();
+  const ok = txt.includes('자동 구성') || txt.includes('직접 구성');
+  console.log(`${ok ? '  OK' : 'FAIL'}  없어진 탭이 저장돼 있어도 화면이 뜬다`);
+  if (!ok) failures.push('예전 탭(builder)이 저장돼 있으면 내용이 비어 있습니다');
+}
 
 const TABS = ['라이브러리', '고객', '시퀀스 만들기', '시퀀스 목록', '재생', '기록', '설정'];
 for (const label of TABS) {

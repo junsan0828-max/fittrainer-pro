@@ -319,16 +319,19 @@ function TitleBar() {
   );
 }
 
+const TABS = [
+  { id: 'library', label: '라이브러리' },
+  { id: 'customers', label: '고객' },
+  { id: 'compose', label: '시퀀스 만들기' },
+  { id: 'queue', label: '시퀀스 목록' },
+  { id: 'player', label: '재생' },
+  { id: 'history', label: '기록' },
+  { id: 'settings', label: '설정' },
+];
+const TAB_IDS = TABS.map(t => t.id);
+
 function TabBar({ tab, setTab, alert }) {
-  const tabs = [
-    { id: 'library', label: '라이브러리' },
-    { id: 'customers', label: '고객' },
-    { id: 'compose', label: '시퀀스 만들기' },
-    { id: 'queue', label: '시퀀스 목록' },
-    { id: 'player', label: '재생' },
-    { id: 'history', label: '기록' },
-    { id: 'settings', label: '설정' },
-  ];
+  const tabs = TABS;
   return (
     <div style={{
       display: 'flex', background: T.surface, borderBottom: `1px solid ${T.border}`,
@@ -2686,7 +2689,13 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
 }
 
 export default function App() {
-  const [tab, setTab] = useState(() => loadLS('ft_tab', 'library'));
+  // 예전 버전은 마지막에 열어둔 탭을 저장해 둔다. 설정·빌더 탭은 만들기로
+  // 합쳐 없어졌으므로, 그대로 두면 업데이트한 사람이 빈 화면을 보게 된다.
+  const [tab, setTab] = useState(() => {
+    const saved = loadLS('ft_tab', 'library');
+    if (saved === 'session' || saved === 'builder') return 'compose';
+    return TAB_IDS.includes(saved) ? saved : 'library';
+  });
   const [rawClips, setClips] = useState(() => loadLS('ft_clips', []));
   // 파일명 접두어(AE, STR ...) -> 카테고리 코드. 파일명 규칙이 제각각이어도 분류할 수 있게 한다.
   const [prefixCats, setPrefixCats] = useState(() => loadLS('ft_prefix_cats', {}));
