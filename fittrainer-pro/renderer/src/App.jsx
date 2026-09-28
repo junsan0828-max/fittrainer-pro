@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { CATS, CAT_MAP, TRAINING_METHODS, CONCEPTS, CONCEPT_MAP, composeProgram,
-         REST_SCALE_DEFAULT, restAfterFor, withinGaps } from './composeProgram';
+         REST_SCALE_DEFAULT, restAfterFor, withinGaps,
+         WEEKDAYS, WEEKDAY_CONCEPT_DEFAULT, conceptForDay } from './composeProgram';
 
 const T = {
   bg: '#0A0A0C', surface: '#111114', panel: '#17171B', border: '#222228',
@@ -986,7 +987,7 @@ function Section({ label, children }) {
 
 // 시퀀스를 만드는 곳. 조건을 주고 자동으로 짜거나, 라이브러리에서 직접 고른다.
 // 둘 다 같은 작업대에 쌓이고, 다 되면 목록으로 넘긴다.
-function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale,
+function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap,
                      customer, sessionCfg, setSessionCfg, onCompose, onSendToList }) {
   const [mode, setMode] = useState(() => loadLS('ft_compose_mode', 'auto'));
   const [catFilter, setCatFilter] = useState('');
@@ -996,6 +997,9 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale,
   const [note, setNote] = useState('');
 
   const pickMode = m => { setMode(m); saveLS('ft_compose_mode', m); };
+
+  // 요일마다 정해진 운동 성격. 설정에서 바꿀 수 있다.
+  const todayConcept = CONCEPT_MAP[conceptForDay(new Date(), weekdayMap)] || null;
 
   function toggleCfg(field, val) {
     setSessionCfg(prev => ({ ...prev, [field]: prev[field] === val ? '' : val }));
@@ -1158,9 +1162,28 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale,
                 onToggle={v => toggleCfg('condition', v)} />
             </Section>
 
+            {/* 요일에 정해진 운동. 월요일이면 전신 근력이 먼저 눈에 들어와야 한다. */}
+            {todayConcept && (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 11, color: T.dim, marginBottom: 6 }}>
+                  오늘은 {WEEKDAYS[new Date().getDay()]}요일
+                </div>
+                <button onClick={() => onCompose(todayConcept.code)} style={{
+                  width: '100%', padding: '14px 12px', borderRadius: 8,
+                  fontSize: 14, fontWeight: 700, background: '#22C55E', color: '#fff',
+                  textAlign: 'left',
+                }}>
+                  + {todayConcept.label}
+                  <span style={{ display: 'block', fontSize: 11, fontWeight: 400, marginTop: 3, opacity: .85 }}>
+                    오늘의 운동 · 누를 때마다 다른 동작으로 짜입니다
+                  </span>
+                </button>
+              </div>
+            )}
+
             <div style={{ fontSize: 12, color: T.dim, margin: '18px 0 8px', lineHeight: 1.6 }}>
-              컨셉을 누르면 위 조건으로 시퀀스가 짜여 오른쪽 작업대에 올라옵니다.
-              여러 번 눌러도 매번 다르게 나옵니다.
+              {todayConcept ? '다른 성격으로 짜려면 아래에서 고르세요.' : '컨셉을 누르면 위 조건으로 시퀀스가 짜여 오른쪽 작업대에 올라옵니다.'}
+              <br />같은 컨셉을 여러 번 눌러도 최근에 쓴 동작은 빼고 짭니다.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {CONCEPTS.map(c => (
@@ -1501,6 +1524,48 @@ function sessionSeconds(ses) {
 // 설정 화면의 한 줄. 제목/설명 왼쪽, 조작 오른쪽.
 // 동작 종류별 휴식 배수를 조절한다.
 // 강도 설정에서 나온 기준 휴식(예: 중강도 60초)에 이 값을 곱한 만큼 쉰다.
+// 요일마다 어떤 성격의 운동을 할지 정해 둔다.
+// 월요일은 늘 전신 근력이어도 동작은 매번 달라진다.
+function WeekdayEditor({ map, onChange }) {
+  const cur = { ...WEEKDAY_CONCEPT_DEFAULT, ...(map || {}) };
+  const today = new Date().getDay();
+  const changed = Object.keys(WEEKDAY_CONCEPT_DEFAULT)
+    .some(k => cur[k] !== WEEKDAY_CONCEPT_DEFAULT[k]);
+
+  return (
+    <div style={{ padding: '14px 16px' }}>
+      <div style={{ fontSize: 12, color: T.dim, lineHeight: 1.6, marginBottom: 14 }}>
+        시퀀스 만들기 탭에 그날 운동이 먼저 뜹니다. 성격은 같아도 동작 구성은
+        매번 달라지므로, 이번 주 월요일과 다음 주 월요일이 같지 않습니다.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {[1, 2, 3, 4, 5, 6, 0].map(d => (
+          <div key={d} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              width: 52, flexShrink: 0, fontSize: 12, fontWeight: 700,
+              padding: '5px 0', textAlign: 'center', borderRadius: 6,
+              background: d === today ? T.accent : T.panel,
+              color: d === today ? '#fff' : T.dim,
+            }}>{WEEKDAYS[d]}요일</span>
+            <select value={cur[d] || ''} aria-label={`${WEEKDAYS[d]}요일 운동`}
+              onChange={e => onChange({ ...cur, [d]: e.target.value })}
+              style={{ flex: 1, fontSize: 13, padding: '6px 8px' }}>
+              <option value="">정하지 않음</option>
+              {CONCEPTS.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+      {changed && (
+        <button onClick={() => onChange({ ...WEEKDAY_CONCEPT_DEFAULT })} style={{
+          marginTop: 14, padding: '6px 12px', borderRadius: 6, fontSize: 12,
+          background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
+        }}>기본값으로</button>
+      )}
+    </div>
+  );
+}
+
 function RestScaleEditor({ scale, onChange }) {
   const cur = { ...REST_SCALE_DEFAULT, ...(scale || {}) };
   const base = 60;   // 중강도 일반 목표 기준. 실제 값은 강도 설정을 따른다.
@@ -1722,6 +1787,11 @@ function SettingsTab({ settings, onSetting, autoConvert, onToggleAutoConvert,
             ))}
           </div>
         </Row>
+      </SetGroup>
+
+      <SetGroup title="요일별 운동">
+        <WeekdayEditor map={settings.weekdayMap}
+          onChange={v => onSetting('weekdayMap', v)} />
       </SetGroup>
 
       <SetGroup title="동작 묶음">
@@ -2857,6 +2927,8 @@ export default function App() {
   const [activeCustomer, setActiveCustomer] = useState(null);
   // 마지막으로 누른 컨셉. 목록에 넘길 때 무엇으로 짰는지 남긴다.
   const [lastConcept, setLastConcept] = useState('');
+  // 동작마다 마지막으로 쓴 시각. 같은 컨셉을 또 돌려도 내용이 겹치지 않게 한다.
+  const [clipUse, setClipUse] = useState(() => loadLS('ft_clip_use', {}));
   const [analysisDone, setAnalysisDone] = useState(() => loadLS('ft_analysis_done', false));
   // 원본 경로 -> 변환된 H.264 경로
   const [playbackMap, setPlaybackMap] = useState({});
@@ -2891,8 +2963,9 @@ export default function App() {
       ...sessionCfg,
       restScale: settings.restScale || REST_SCALE_DEFAULT,
       groupSize: settings.groupSize || 0,   // 0 이면 구성 방식이 정한다
+      recentUse: clipUse,                   // 최근 쓴 동작은 뒤로 미룬다
     }),
-    [sessionCfg, settings.restScale, settings.groupSize],
+    [sessionCfg, settings.restScale, settings.groupSize, clipUse],
   );
 
   // 파일 목록이 실제로 바뀌었는지 판단하는 키.
@@ -3258,6 +3331,19 @@ export default function App() {
     setLastConcept(con.label);
   }
 
+  // 쓴 동작을 기록해 둔다. 다음 조합은 이걸 피해서 짠다.
+  function markUsed(list) {
+    const now = Date.now();
+    setClipUse(prev => {
+      const next = { ...prev };
+      for (const b of list) {
+        for (const c of blockClips(b)) if (c?.filePath) next[c.filePath] = now;
+      }
+      saveData('ft_clip_use', next);
+      return next;
+    });
+  }
+
   // 작업대의 구성을 이름 붙여 목록으로 넘긴다
   function sendBlocksToList(label) {
     if (blocks.length === 0) return;
@@ -3271,6 +3357,7 @@ export default function App() {
       queued: true,
     };
     setSessions(prev => { const next = [...prev, ses]; saveData('ft_sessions', next); return next; });
+    markUsed(blocks);
     return ses;
   }
 
@@ -3376,7 +3463,8 @@ export default function App() {
         api.loadData('ft_settings'),
         api.loadData('ft_prefix_cats'),
         api.loadData('ft_durations'),
-      ]).then(([cust, blks, attrs, ses, pl, hist, cfg, prefix, durs]) => {
+        api.loadData('ft_clip_use'),
+      ]).then(([cust, blks, attrs, ses, pl, hist, cfg, prefix, durs, used]) => {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
@@ -3388,6 +3476,7 @@ export default function App() {
         // 브라우저 저장소가 비워져도 접두어 매핑을 잃지 않게 한다.
         if (prefix) { setPrefixCats(prefix); saveLS('ft_prefix_cats', prefix); }
         if (durs)   { setDurations(prev => ({ ...durs, ...prev })); saveLS('ft_durations', durs); }
+        if (used)   { setClipUse(prev => ({ ...used, ...prev })); saveLS('ft_clip_use', used); }
       }).catch(() => {});
     }
 
@@ -3430,7 +3519,8 @@ export default function App() {
           <ComposeTab clips={clips} clipAttrs={clipAttrs} blocks={blocks} setBlocks={setBlocks}
             restScale={settings.restScale || REST_SCALE_DEFAULT}
             customer={activeCustomer} sessionCfg={sessionCfg} setSessionCfg={setSessionCfg}
-            onCompose={composeToWorkbench} onSendToList={sendBlocksToList} />
+            weekdayMap={settings.weekdayMap} onCompose={composeToWorkbench}
+            onSendToList={sendBlocksToList} />
         )}
         {tab === 'queue' && (
           <QueueTab sessions={hydratedSessions} setSessions={setSessions} setTab={setTab}

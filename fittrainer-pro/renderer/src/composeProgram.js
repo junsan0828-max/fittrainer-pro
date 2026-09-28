@@ -50,6 +50,26 @@ export const CONCEPTS = [
 ];
 export const CONCEPT_MAP = Object.fromEntries(CONCEPTS.map(c => [c.code, c]));
 
+// 요일마다 정해진 운동 성격. 월요일은 늘 전신 근력, 화요일은 유산소·코어 식이다.
+// 컨셉은 같아도 동작 구성은 매번 달라진다(freshFirst 참고).
+export const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+export const WEEKDAY_CONCEPT_DEFAULT = {
+  1: 'full_strength',   // 월 — 전신 근력
+  2: 'cardio_core',     // 화 — 유산소 · 코어
+  3: 'lower',           // 수 — 하체 집중
+  4: 'circuit_full',    // 목 — 전신 순환운동
+  5: 'upper_core',      // 금 — 상체 · 코어
+  6: 'recovery',        // 토 — 스트레칭 · 회복
+  0: 'recovery',        // 일 — 스트레칭 · 회복
+};
+
+// 그날 무엇을 하기로 되어 있는지
+export function conceptForDay(date = new Date(), map) {
+  const table = { ...WEEKDAY_CONCEPT_DEFAULT, ...(map || {}) };
+  return table[date.getDay()] || '';
+}
+
+
 // 동작 뒤 휴식은 종류마다 달라야 한다.
 // 무거운 근력 뒤에는 길게 쉬어야 하지만, 코어나 스트레칭 뒤에 같은 시간을 쉬면
 // 수업이 늘어진다. 강도 설정에서 나온 기준 휴식에 이 배수를 곱해 쓴다.
@@ -157,6 +177,27 @@ function shuffle(arr) {
   return a;
 }
 
+// 오래 안 쓴 동작을 앞에 둔다.
+//
+// 같은 컨셉을 반복해서 돌리는 곳이라 이게 중요하다. 월요일이 늘 전신 근력이면
+// 이번 주 월요일과 다음 주 월요일이 같은 동작으로 채워지고, 같은 날 10시 반과
+// 12시 운동도 똑같아진다. 쓴 날짜별로 묶어 오래된 묶음부터 꺼내되 묶음 안에서는
+// 섞어서, 안 겹치면서도 매번 다른 조합이 나오게 한다.
+function freshFirst(list, recentUse) {
+  if (!recentUse) return shuffle(list);
+  const DAY = 86400000;
+  const buckets = new Map();
+  for (const c of list) {
+    const used = recentUse[c.filePath] || recentUse[c.id] || 0;
+    // 한 번도 안 쓴 것이 가장 앞. 그다음은 쓴 날이 오래된 순.
+    const key = used ? Math.floor(used / DAY) : -1;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(c);
+  }
+  return [...buckets.keys()].sort((a, b) => a - b)
+    .flatMap(k => shuffle(buckets.get(k)));
+}
+
 // 연속 두 클립이 같은 신체부위면 뒤쪽에서 다른 부위 클립과 자리를 바꾼다(best-effort).
 // AI 생성 프롬프트가 이미 요구하던 규칙("연속 2회 이상 같은 bodyParts 금지")을
 // 규칙기반 조합에도 동일하게 적용한다.
@@ -186,6 +227,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const isDiet = customer?.goal === '다이어트';
   const method = pickMethod(customer, sessionCfg);
 
+  // 최근에 쓴 동작을 뒤로 미루기 위한 기록. { 파일경로: 마지막으로 쓴 시각(ms) }
+  const recentUse = sessionCfg.recentUse || null;
+
   let pool = enrichedClips.filter(c => {
     if (sessionCfg.includeCats?.length > 0 && !sessionCfg.includeCats.includes(c.code)) return false;
     if (customer?.injuries?.length > 0 && c.injuryRisk?.length > 0) {
@@ -199,9 +243,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     const matched = pool.filter(c => (c.part || '').includes(focus) || (c.bodyParts || []).includes(focus));
     const rest = pool.filter(c => !(c.part || '').includes(focus) && !(c.bodyParts || []).includes(focus));
     // 포커스 우선순위는 유지하되, 그룹 내부는 매 실행마다 셔플 — 다양성 확보의 핵심.
-    pool = [...shuffle(matched), ...shuffle(rest)];
+    pool = [...freshFirst(matched, recentUse), ...freshFirst(rest, recentUse)];
   } else {
-    pool = shuffle(pool);
+    pool = freshFirst(pool, recentUse);
   }
 
   const seen = new Set();
@@ -209,9 +253,32 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
 
   const byCode = code => pool.filter(c => c.code === code);
   const byCodes = codes => pool.filter(c => codes.includes(c.code));
+  // 준비운동 풀과 정리운동 풀은 폼롤링·스트레칭을 함께 쓴다. 한쪽에서 꺼내도
+  // 다른 쪽에는 그대로 남아 있어, 같은 동작이 한 시퀀스에 두 번 들어가곤 했다.
+  // 어느 풀에서 꺼냈든 한 번 쓴 동작은 다시 꺼내지 않는다.
+  const claimed = new Set();
+  const keyOf = c => c?.filePath || c?.id;
+  // 최근에 쓰지 않은 동작. 시간을 맞출 때도 이쪽을 먼저 쓴다.
+  const isFresh = c => !recentUse || (!recentUse[c?.filePath] && !recentUse[c?.id]);
+  const claim = c => { claimed.add(keyOf(c)); return c; };
+  const isFree = c => c && !claimed.has(keyOf(c));
+
+  // 맨 앞에서 아직 안 쓴 것을 하나 꺼낸다
+  const nextFrom = (source) => {
+    while (source.length) {
+      const c = source.shift();
+      if (isFree(c)) return claim(c);
+    }
+    return null;
+  };
   const takeAndRemove = (source, count) => {
-    const taken = source.splice(0, count);
-    return taken;
+    const out = [];
+    while (out.length < count) {
+      const c = nextFrom(source);
+      if (!c) break;
+      out.push(c);
+    }
+    return out;
   };
 
   const dur = sessionCfg.duration || 30;
@@ -253,11 +320,11 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     // 서킷형: [근력, 코어, 유산소] 한 라운드를 목표 개수만큼 반복 — 다이어트처럼
     // 심박수를 계속 흔드는 구성이지만 코어까지 매 라운드에 끼워 넣어 근력만 반복되지 않게 한다.
     while (mainClips.length < mainCount && (queues.str.length || queues.core.length || queues.car.length)) {
-      if (queues.str.length) mainClips.push(queues.str.shift());
+      { const c = nextFrom(queues.str); if (c) mainClips.push(c); }
       if (mainClips.length >= mainCount) break;
-      if (queues.core.length) mainClips.push(queues.core.shift());
+      { const c = nextFrom(queues.core); if (c) mainClips.push(c); }
       if (mainClips.length >= mainCount) break;
-      if (queues.car.length) mainClips.push(queues.car.shift());
+      { const c = nextFrom(queues.car); if (c) mainClips.push(c); }
       if (!queues.str.length && !queues.core.length && !queues.car.length) break;
     }
   } else if (method === 'interleave') {
@@ -267,20 +334,18 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     let recoveryToggle = 0;
     while (mainClips.length < mainCount && (queues.str.length || queues.core.length || queues.car.length || queues.cool.length)) {
       const mainSrc = mainClips.length % 3 === 2 && queues.core.length ? queues.core : queues.str;
-      if (mainSrc.length) mainClips.push(mainSrc.shift());
-      else if (queues.core.length) mainClips.push(queues.core.shift());
+      { const c = nextFrom(mainSrc) || nextFrom(queues.core); if (c) mainClips.push(c); }
       if (mainClips.length >= mainCount) break;
 
       if (queues.car.length) {
-        mainClips.push(queues.car.shift());
+        { const c = nextFrom(queues.car); if (c) mainClips.push(c); }
       }
       if (mainClips.length >= mainCount) break;
 
       const recoverySrc = recoveryToggle % 2 === 0 ? queues.warm : queues.cool;
       recoveryToggle++;
-      if (recoverySrc.length) mainClips.push(recoverySrc.shift());
-      else if (queues.warm.length) mainClips.push(queues.warm.shift());
-      else if (queues.cool.length) mainClips.push(queues.cool.shift());
+      { const c = nextFrom(recoverySrc) || nextFrom(queues.warm) || nextFrom(queues.cool);
+        if (c) mainClips.push(c); }
 
       if (!queues.str.length && !queues.core.length && !queues.car.length && !queues.cool.length && !queues.warm.length) break;
     }
@@ -290,20 +355,17 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     // 페어 몇 개마다 코어를 끼워 근력만 반복되는 단조로움을 줄인다.
     let pairCount = 0;
     while (mainClips.length < mainCount && (queues.str.length || queues.core.length)) {
-      const first = queues.str.shift();
+      const first = nextFrom(queues.str);
       if (!first) break;
       mainClips.push(first);
       if (mainClips.length >= mainCount) break;
       // 같은 부위가 아닌 클립을 짝으로 찾는다.
-      let pairIdx = queues.str.findIndex(c => c.part !== first.part);
-      if (pairIdx === -1) pairIdx = queues.str.length ? 0 : -1;
-      if (pairIdx !== -1) {
-        const [second] = queues.str.splice(pairIdx, 1);
-        mainClips.push(second);
-      }
+      let pairIdx = queues.str.findIndex(c => isFree(c) && c.part !== first.part);
+      if (pairIdx === -1) pairIdx = queues.str.findIndex(isFree);
+      if (pairIdx !== -1) mainClips.push(claim(queues.str.splice(pairIdx, 1)[0]));
       pairCount++;
       if (pairCount % 2 === 0 && queues.core.length && mainClips.length < mainCount) {
-        mainClips.push(queues.core.shift());
+        { const c = nextFrom(queues.core); if (c) mainClips.push(c); }
       }
     }
     if (mainClips.length < mainCount && queues.car.length) {
@@ -376,15 +438,21 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     const picked = [];
     while (picked.length < groupSize) {
       let best = null, bestQ = null, bestIdx = -1;
-      for (const q of fillOrder) {
-        q.forEach((c, k) => {
-          const trial = [...picked, c];
-          if (limit != null && now() + cost(trial) > limit) return;
-          if (!best || clipSec(c) < clipSec(best)) { best = c; bestQ = q; bestIdx = k; }
-        });
+      // 안 쓴 동작 중에서 가장 짧은 것을 먼저 찾고, 없을 때만 쓴 것까지 본다.
+      // 이 순서를 안 지키면 '짧아서' 뽑힌 동작이 매번 같아진다.
+      for (const onlyFresh of [true, false]) {
+        for (const q of fillOrder) {
+          q.forEach((c, k) => {
+            if (!isFree(c) || (onlyFresh && !isFresh(c))) return;
+            const trial = [...picked, c];
+            if (limit != null && now() + cost(trial) > limit) return;
+            if (!best || clipSec(c) < clipSec(best)) { best = c; bestQ = q; bestIdx = k; }
+          });
+        }
+        if (best) break;
       }
       if (!best) break;
-      picked.push(bestQ.splice(bestIdx, 1)[0]);
+      picked.push(claim(bestQ.splice(bestIdx, 1)[0]));
       if (limit != null) break;   // 상한을 지켜야 할 땐 한 개씩 보태며 확인한다
     }
     return picked.length ? picked : null;
@@ -454,13 +522,17 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
 
   // 라이브러리가 너무 작아 더 넣을 게 없으면 쓰던 묶음을 다시 돌린다.
   // 이때도 코어가 든 묶음을 먼저 돌려 같은 근력만 반복되는 것을 피한다.
-  if (now() < targetSec && mainUnits.length > 0) {
+  if (now() < targetSec) {
     const coreCodes = ['CCS', 'CCB'];
     // 묶음째로 밀어 넣으면 한 번에 너무 많이 늘어난다. 동작 하나씩 보탠다.
-    const flat = mainUnits.flat();
+    // 재료가 너무 적어 본운동이 하나도 안 잡혔으면 준비·정리운동 동작이라도
+    // 돌린다. 같은 동작이 반복되더라도 목표 시간을 채우는 쪽이 낫다.
+    const flat = mainUnits.length ? mainUnits.flat() : [...warmupClips, ...coolClips];
     const cycle = [...flat.filter(c => coreCodes.includes(c.code)), ...flat];
     let k = 0, repeatGuard = 0;
-    while (now() < targetSec && repeatGuard++ < 400) mainUnits.push([cycle[k++ % cycle.length]]);
+    while (cycle.length && now() < targetSec && repeatGuard++ < 400) {
+      mainUnits.push([cycle[k++ % cycle.length]]);
+    }
   }
 
   mainClips = mainUnits.flat();

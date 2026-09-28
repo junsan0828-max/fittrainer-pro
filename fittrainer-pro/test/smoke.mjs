@@ -336,6 +336,48 @@ async function checkSchedule() {
 }
 await checkSchedule();
 
+// 요일별 운동: 오늘 할 운동이 먼저 뜨고, 요일표를 고칠 수 있다
+async function checkWeekday() {
+  const before = failures.length;
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[요일] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+  const 요일 = ['일', '월', '화', '수', '목', '금', '토'][new Date().getDay()];
+
+  await page.getByRole('button', { name: '시퀀스 만들기', exact: true }).first().click();
+  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: '자동 구성', exact: true }).first().click();
+  await page.waitForTimeout(250);
+
+  await step('오늘 요일이 보인다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes(`오늘은 ${요일}요일`)) throw new Error(`'오늘은 ${요일}요일' 이 없음`);
+  });
+
+  await step('오늘의 운동이 먼저 뜬다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('오늘의 운동')) throw new Error("'오늘의 운동' 안내가 없음");
+  });
+
+  await step('같은 컨셉을 또 눌러도 겹치지 않는다고 알린다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('최근에 쓴 동작은 빼고')) throw new Error('안내 문구가 없음');
+  });
+
+  await step('설정에서 요일표를 고칠 수 있다', async () => {
+    await page.getByRole('button', { name: '설정', exact: true }).first().click();
+    await page.waitForTimeout(350);
+    const n = await page.locator('select[aria-label$="요일 운동"]').count();
+    if (n !== 7) throw new Error(`요일 칸이 ${n}개`);
+    const mon = page.locator('select[aria-label="월요일 운동"]');
+    if (await mon.inputValue() !== 'full_strength')
+      throw new Error('월요일 기본값이 전신 근력이 아님');
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  요일별 운동`);
+}
+await checkWeekday();
+
 // 시퀀스 빌더: 묶음 표시와 묶기/풀기
 async function checkGrouping() {
   const before = failures.length;
