@@ -114,15 +114,17 @@ function normalizeGap(gap) {
   return { mode: 'wait', minutes: Number(gap.minutes) || 0 };
 }
 
-// 'HH:MM' 까지 남은 초. 이미 지난 시각이면 다음 날 같은 시각으로 본다.
-function secondsUntilClock(at, from = new Date()) {
+// 'HH:MM' 까지 남은 초.
+// 시퀀스 사이 간격이면 지난 시각은 다음 날로 본다(밤샘 구성도 있을 수 있다).
+// 하루 시간표면 지난 시각은 기다릴 이유가 없으니 0 으로 본다.
+function secondsUntilClock(at, from = new Date(), rollover = true) {
   const [h, m] = String(at || '').split(':').map(Number);
   if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
   const target = new Date(from);
   target.setHours(h, m, 0, 0);
-  let diff = Math.round((target - from) / 1000);
-  if (diff < 0) diff += 24 * 3600;
-  return diff;
+  const diff = Math.round((target - from) / 1000);
+  if (diff >= 0) return diff;
+  return rollover ? diff + 24 * 3600 : 0;
 }
 
 // 지금 이후 가장 가까운 정각
@@ -143,7 +145,7 @@ function gapLabel(gap) {
 function itemSeconds(it) {
   if (!it) return 0;
   // 정각 대기는 고정 길이가 없다. 지금 기준으로 환산해 총 시간에 반영한다.
-  if (it.type === 'break' && it.untilClock) return secondsUntilClock(it.untilClock);
+  if (it.type === 'break' && it.untilClock) return secondsUntilClock(it.untilClock, new Date(), !it.scheduled);
   if (it.type === 'rest' || it.type === 'break') return it.duration || 0;
   return it.clip?.duration || 0;
 }
@@ -1443,6 +1445,20 @@ function expandPlaylist(entries) {
     const part = expandToQueue(entry.blocks || [], entry.name);
     if (part.length === 0) return;
 
+    // 시작 시각이 정해져 있으면 그 시각까지 기다린다. 첫 시퀀스도 마찬가지다.
+    // 아침에 한 번 켜 두면 정한 시각에만 영상이 돌고 그 사이는 카운트다운이 뜬다.
+    if (entry.startAt) {
+      // 앞 시퀀스의 마지막 전환 휴식은 대기와 겹치므로 뺀다
+      const prev = q[q.length - 1];
+      if (prev?.type === 'rest') q.pop();
+      q.push({
+        type: 'break', scheduled: true,
+        untilClock: entry.startAt, duration: 0,
+        sessionName: i > 0 ? entries[i - 1]?.name || '' : '',
+        nextName: entry.name,
+      });
+    }
+
     // 마지막 동작 뒤의 전환 휴식은 시퀀스 사이 간격과 겹치므로 뺀다.
     // 다만 '바로 시작'이면 겹칠 간격이 없으니 그대로 둔다.
     const g = normalizeGap(entries[i]?.gap);
@@ -1452,7 +1468,7 @@ function expandPlaylist(entries) {
 
     q.push(...part);
     const next = entries[i + 1];
-    if (!next) return;
+    if (!next || next.startAt) return;   // 다음이 시각을 갖고 있으면 그쪽이 대기를 만든다
     const gap = normalizeGap(entry.gap);
     if (gap.mode === 'clock') {
       q.push({
@@ -1896,6 +1912,31 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
 
   const allOn = sessions.length > 0 && queued.length === sessions.length;
 
+  // 하루 시간표. 켜면 시퀀스마다 시작 시각을 정하고, 그 시각에만 영상이 돈다.
+  // 사이에는 다음 운동까지 남은 시간이 뜬다.
+  const scheduled = queued.some(x => x.startAt);
+  const past = at => at && secondsUntilClock(at, new Date(), false) === 0;
+  function setStart(id, at) {
+    patch(prev => prev.map(x => (x.id === id ? { ...x, startAt: at || '' } : x)));
+  }
+  // 시간표를 처음 켤 때는 지금부터 한 시간 간격으로 채워 둔다. 고치면 된다.
+  function turnScheduleOn() {
+    const base = new Date();
+    base.setMinutes(0, 0, 0);
+    patch(prev => {
+      let n = 0;
+      return prev.map(x => {
+        if (x.queued === false) return x;
+        const d = new Date(base.getTime() + (++n) * 3600_000);
+        const at = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        return { ...x, startAt: x.startAt || at };
+      });
+    });
+  }
+  function turnScheduleOff() {
+    patch(prev => prev.map(x => ({ ...x, startAt: '' })));
+  }
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
@@ -1909,16 +1950,28 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
                 {queued.length}/{sessions.length}개 선택 · 총 {humanTime(totalSec)}
               </span>
               <button
-                onClick={() => patch(prev => prev.map(s => ({ ...s, queued: !allOn })))}
+                onClick={() => (scheduled ? turnScheduleOff() : turnScheduleOn())}
+                title="정한 시각에만 영상이 돌고, 사이에는 남은 시간이 뜹니다"
                 style={{
                   marginLeft: 'auto', padding: '4px 10px', borderRadius: 6, fontSize: 11,
+                  fontWeight: 600,
+                  background: scheduled ? '#22C55E' : 'transparent',
+                  color: scheduled ? '#fff' : T.dim,
+                  border: `1px solid ${scheduled ? '#22C55E' : T.border}`,
+                }}>시간표 {scheduled ? '켜짐' : '꺼짐'}</button>
+              <button
+                onClick={() => patch(prev => prev.map(s => ({ ...s, queued: !allOn })))}
+                style={{
+                  padding: '4px 10px', borderRadius: 6, fontSize: 11,
                   background: 'transparent', color: T.dim, border: `1px solid ${T.border}`,
                 }}>{allOn ? '전체 해제' : '전체 선택'}</button>
             </>
           )}
         </div>
         <div style={{ fontSize: 11, color: T.dim, marginBottom: 10 }}>
-          체크한 시퀀스가 위에서부터 이어서 재생됩니다. 더블클릭하면 그것만 재생합니다.
+          {scheduled
+            ? '정한 시각에만 영상이 돌아갑니다. 그 사이에는 다음 운동까지 남은 시간이 뜹니다.'
+            : '체크한 시퀀스가 위에서부터 이어서 재생됩니다. 더블클릭하면 그것만 재생합니다.'}
         </div>
 
         {sessions.length === 0 ? (
@@ -1931,7 +1984,7 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
           const broken = ses.blocks.filter(b => missingPaths?.has(b.clip?.filePath)).length;
           const order = on ? queued.findIndex(q => q.id === ses.id) + 1 : 0;
           // 뒤에 재생될 시퀀스가 있어야 간격을 정할 의미가 있다
-          const hasNext = on && order > 0 && order < queued.length;
+          const hasNext = !scheduled && on && order > 0 && order < queued.length;
           const gap = normalizeGap(ses.gap);
 
           return (
@@ -1981,6 +2034,19 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
                     )}
                   </div>
                 </div>
+
+                {scheduled && on && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <input type="time" step={300} value={ses.startAt || ''}
+                      aria-label={`${ses.name} 운동 시작 시각`}
+                      onChange={e => setStart(ses.id, e.target.value)}
+                      style={{ fontSize: 13, padding: '5px 8px', width: 108 }} />
+                    {ses.startAt && past(ses.startAt) && (
+                      <span title="지난 시각이라 기다리지 않고 바로 시작합니다"
+                        style={{ fontSize: 10, color: T.dimMid }}>지남</span>
+                    )}
+                  </div>
+                )}
 
                 <button disabled={i === 0} onClick={() => move(i, -1)}
                   style={{ padding: '4px 9px', borderRadius: 5, background: T.panel,
@@ -2088,7 +2154,9 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
           <button onClick={() => setTab('player')} style={{
             width: '100%', marginTop: 18, padding: '12px 20px', borderRadius: 8,
             background: T.accent, color: '#fff', fontSize: 14, fontWeight: 600,
-          }}>이어서 재생 ({queued.length}개 시퀀스 · {humanTime(totalSec)})</button>
+          }}>{scheduled
+            ? `오늘 시간표 시작 (${queued.length}개 운동)`
+            : `이어서 재생 (${queued.length}개 시퀀스 · ${humanTime(totalSec)})`}</button>
         )}
       </div>
     </div>
@@ -2207,7 +2275,8 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
   useEffect(() => {
     if (cur?.type !== 'rest' && cur?.type !== 'break') return;
     // 정각 대기는 시작하는 순간에야 남은 시간이 정해진다
-    setRestCountdown(cur.untilClock ? secondsUntilClock(cur.untilClock) : cur.duration);
+    setRestCountdown(cur.untilClock
+      ? secondsUntilClock(cur.untilClock, new Date(), !cur.scheduled) : cur.duration);
     setPreviewFailed(false);
   }, [ci, cur?.type]);
 
@@ -2218,7 +2287,7 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
       // 정각 대기는 남은 시간을 빼는 대신 시계를 다시 본다.
       // 그래야 일시정지했다 재개해도 지정한 시각에 정확히 시작한다.
       if (cur.untilClock) {
-        const left = secondsUntilClock(cur.untilClock);
+        const left = secondsUntilClock(cur.untilClock, new Date(), !cur.scheduled);
         if (left <= 0) { clearInterval(restTimer.current); goNext(); }
         else setRestCountdown(left);
         return;
@@ -2472,17 +2541,36 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
             <div style={{
               fontSize: 13, fontWeight: 600, letterSpacing: 2, color: '#22C55E',
               textTransform: 'uppercase', marginBottom: 10,
-            }}>{cur.untilClock ? `${cur.untilClock} 시작 대기` : '시퀀스 간 휴식'}</div>
+            }}>{cur.scheduled ? '다음 운동까지'
+              : cur.untilClock ? `${cur.untilClock} 시작 대기` : '시퀀스 간 휴식'}</div>
             <div style={{
               fontSize: 108, fontWeight: 800, color: '#22C55E', lineHeight: 1,
               fontVariantNumeric: 'tabular-nums',
             }}>{mmss(restCountdown)}</div>
-            <div style={{ fontSize: 14, color: T.dim, marginTop: 18 }}>
-              {cur.sessionName ? `${cur.sessionName} 완료` : '시퀀스 완료'}
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 700, marginTop: 6 }}>
-              다음 · {cur.nextName || '다음 시퀀스'}
-            </div>
+            {cur.scheduled ? (
+              <>
+                <div style={{ fontSize: 26, fontWeight: 800, marginTop: 18, color: T.text }}>
+                  {cur.untilClock}
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
+                  {cur.nextName || '다음 운동'}
+                </div>
+                {cur.sessionName && (
+                  <div style={{ fontSize: 13, color: T.dim, marginTop: 10 }}>
+                    방금 마친 운동 · {cur.sessionName}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, color: T.dim, marginTop: 18 }}>
+                  {cur.sessionName ? `${cur.sessionName} 완료` : '시퀀스 완료'}
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 700, marginTop: 6 }}>
+                  다음 · {cur.nextName || '다음 시퀀스'}
+                </div>
+              </>
+            )}
             <button onClick={skipRest} style={{
               marginTop: 28, padding: '12px 28px', borderRadius: 8,
               background: 'rgba(34,197,94,.16)', color: '#22C55E',

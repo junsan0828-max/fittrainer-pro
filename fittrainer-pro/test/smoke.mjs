@@ -289,6 +289,53 @@ async function checkComposeFlow() {
 }
 await checkComposeFlow();
 
+// 하루 시간표: 정한 시각에만 영상이 돌고 사이에는 남은 시간이 뜬다
+async function checkSchedule() {
+  const before = failures.length;
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[시간표] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+  await page.getByRole('button', { name: '시퀀스 목록', exact: true }).first().click();
+  await page.waitForTimeout(300);
+
+  await step('시간표를 켤 수 있다', async () => {
+    const btn = page.getByRole('button', { name: /시간표 (켜짐|꺼짐)/ }).first();
+    if (await btn.count() === 0) throw new Error('시간표 스위치가 없음');
+    await btn.click();
+    await page.waitForTimeout(350);
+    if (await page.getByRole('button', { name: '시간표 켜짐', exact: true }).count() === 0)
+      throw new Error('켜지지 않음');
+  });
+
+  await step('시퀀스마다 시작 시각이 생긴다', async () => {
+    const n = await page.locator('input[type=time][aria-label$="운동 시작 시각"]').count();
+    if (n < 2) throw new Error(`시각 칸이 ${n}개뿐`);
+  });
+
+  await step('시간표일 때는 간격 설정이 사라진다', async () => {
+    if (await page.getByRole('button', { name: '지정 시각', exact: true }).count() !== 0)
+      throw new Error('간격 설정이 남아 있음');
+  });
+
+  await step('시작 버튼이 시간표 문구로 바뀐다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('오늘 시간표 시작')) throw new Error("'오늘 시간표 시작' 이 없음");
+    if (!txt.includes('다음 운동까지')
+      && !txt.includes('정한 시각에만 영상이 돌아갑니다'))
+      throw new Error('시간표 안내가 없음');
+  });
+
+  await step('다시 누르면 꺼지고 시각이 비워진다', async () => {
+    await page.getByRole('button', { name: '시간표 켜짐', exact: true }).first().click();
+    await page.waitForTimeout(350);
+    if (await page.locator('input[type=time][aria-label$="운동 시작 시각"]').count() !== 0)
+      throw new Error('껐는데 시각 칸이 남아 있음');
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  시간표 · 시각 지정`);
+}
+await checkSchedule();
+
 // 시퀀스 빌더: 묶음 표시와 묶기/풀기
 async function checkGrouping() {
   const before = failures.length;
