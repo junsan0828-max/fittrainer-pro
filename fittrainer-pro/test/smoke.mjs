@@ -45,6 +45,18 @@ const CLIPS = [
     part: '하체', reps: 30, duration: 35, filePath: 'C:/v/b.mp4', playbackPath: 'C:/v/b.mp4' },
   { id: 'c3', fileName: 'AE 점핑잭. 전신. 020.mp4', code: 'CAR', name: '점핑잭',
     part: '전신', reps: 20, duration: 45, filePath: 'C:/v/c.mp4', playbackPath: 'C:/v/c.mp4' },
+  // 하루치를 여러 타임으로 짜려면 이 정도는 있어야 한다.
+  // 실제 라이브러리는 수백 개라, 셋만 두면 겹칠 수밖에 없는 상황만 시험하게 된다.
+  ...['STR', 'MOV', 'CFR', 'CFS', 'CCB', 'CCS', 'STT', 'CAR'].flatMap((code, ci) =>
+    Array.from({ length: 12 }, (_, i) => {
+      const n = ci * 12 + i;
+      return {
+        id: `x${n}`, fileName: `${code}_${n}.mp4`, code,
+        name: `${code}동작${n}`, part: ['전신', '하체', '상체', '코어'][n % 4],
+        reps: 15, duration: 35 + (n % 21),
+        filePath: `C:/v/x${n}.mp4`, playbackPath: `C:/v/x${n}.mp4`,
+      };
+    })),
 ];
 
 const block = (clip, sets = 2) =>
@@ -67,6 +79,9 @@ const STORE = {
     // 길이를 못 읽은 채 저장된 시퀀스. ft_durations 로 되살아나야 한다.
     { id: 's3', name: '길이 잃은 시퀀스', queued: false,
       blocks: [block({ ...CLIPS[0], duration: 0 }), block({ ...CLIPS[1], duration: 0 })] },
+    // 어제 만들어 체크해 둔 시퀀스. 오늘 앱을 켜면 대기열에서 빠져야 한다.
+    { id: 's0', name: '어제 시퀀스', queued: true, startAt: '10:30',
+      savedAt: Date.now() - 36 * 3600 * 1000, blocks: [block(CLIPS[0])] },
   ],
   // c1=40초, c2=35초 → 블록당 40*2+20+60=160, 35*2+20+60=150 → 합 310초 = 5분 10초
   ft_durations: { 'C:/v/a.mp4': 40, 'C:/v/b.mp4': 35, 'C:/v/c.mp4': 45 },
@@ -377,6 +392,83 @@ async function checkWeekday() {
   console.log(`${failures.length === before ? '  OK' : 'FAIL'}  요일별 운동`);
 }
 await checkWeekday();
+
+// 아침에 한 번 눌러 하루치를 짜는 흐름
+async function checkDayPlan() {
+  const before = failures.length;
+  const step = async (what, fn) => {
+    try { await fn(); } catch (e) { failures.push(`[하루짜기] ${what}: ${e.message.split('\n')[0]}`); }
+  };
+  await page.getByRole('button', { name: '시퀀스 목록', exact: true }).first().click();
+  await page.waitForTimeout(350);
+
+  await step('타임 수·시각·간격을 정할 수 있다', async () => {
+    for (const label of ['타임 수', '첫 타임 시각', '타임 간격']) {
+      if (await page.locator(`[aria-label="${label}"]`).count() === 0)
+        throw new Error(`'${label}' 칸이 없음`);
+    }
+  });
+
+  await step('마지막 타임 시각을 미리 알려 준다', async () => {
+    await page.locator('[aria-label="타임 수"]').fill('4');
+    await page.locator('[aria-label="첫 타임 시각"]').fill('10:30');
+    await page.waitForTimeout(250);
+    const txt = await page.locator('#root').innerText();
+    // 10:30 에서 90분씩 네 타임이면 마지막은 15:00
+    if (!txt.includes('15:00')) throw new Error(`마지막 시각 안내가 없음`);
+  });
+
+  await step('누르면 하루치가 만들어지고 시각이 붙는다', async () => {
+    await page.getByRole('button', { name: '하루치 짜기', exact: true }).click();
+    await page.waitForTimeout(1200);
+    const txt = await page.locator('#root').innerText();
+    if (!/\d타임을 짰습니다/.test(txt)) throw new Error('짜였다는 안내가 없음');
+    if (!txt.includes('1타임')) throw new Error('타임이 목록에 없음');
+    const times = await page.locator('input[type=time][aria-label$="운동 시작 시각"]').count();
+    if (times < 4) throw new Error(`시각 칸이 ${times}개`);
+  });
+
+  await step('짜고 나면 시간표가 켜진 상태다', async () => {
+    if (await page.getByRole('button', { name: '시간표 켜짐', exact: true }).count() === 0)
+      throw new Error('시간표가 꺼져 있음');
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('오늘 시간표 시작')) throw new Error('시작 버튼 문구가 다름');
+  });
+
+  await step('타임마다 동작이 겹치지 않는다', async () => {
+    const names = await page.evaluate(() => {
+      const ses = JSON.parse(localStorage.getItem('ft_sessions') || '[]')
+        .filter(s => s.startAt);
+      return ses.map(s => s.blocks.flatMap(b => (b.clips || [b.clip]).map(c => c?.filePath)));
+    });
+    for (let i = 0; i < names.length; i++) {
+      for (let j = i + 1; j < names.length; j++) {
+        const dup = names[i].filter(x => names[j].includes(x));
+        if (dup.length) throw new Error(`${i + 1}타임과 ${j + 1}타임이 ${dup.length}개 겹침`);
+      }
+    }
+  });
+
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  오늘 하루 짜기`);
+}
+await checkDayPlan();
+
+// 날이 바뀌면 어제 대기열은 비워야 한다
+async function checkRollover() {
+  const before = failures.length;
+  try {
+    const y = await page.evaluate(() =>
+      (JSON.parse(localStorage.getItem('ft_sessions') || '[]')
+        .find(s => s.id === 's0')) || null);
+    if (!y) throw new Error('어제 시퀀스가 사라졌습니다 — 지우면 안 됩니다');
+    if (y.queued !== false) throw new Error('어제 시퀀스가 아직 대기열에 있습니다');
+    if (y.startAt) throw new Error(`어제 시각이 남아 있습니다 (${y.startAt})`);
+  } catch (e) {
+    failures.push(`[날 바뀜] ${e.message.split('\n')[0]}`);
+  }
+  console.log(`${failures.length === before ? '  OK' : 'FAIL'}  날이 바뀌면 어제 대기열은 비운다`);
+}
+await checkRollover();
 
 // 시퀀스 빌더: 묶음 표시와 묶기/풀기
 async function checkGrouping() {

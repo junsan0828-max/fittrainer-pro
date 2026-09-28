@@ -1422,6 +1422,24 @@ function SummaryRow({ label, value }) {
 
 // 한 블록은 동작 하나일 수도, 여러 동작을 한 라운드로 묶은 것일 수도 있다.
 // 묶음이면 [로우 → 푸시업 → 로우 → 팔] 한 바퀴가 1세트고, 그걸 세트 수만큼 돈다.
+// 어제 대기열은 비운다.
+//
+// 시각은 'HH:MM' 이라 날짜가 없다. 그냥 두면 어제 만든 시퀀스가 오늘 같은
+// 시각에 또 잡히고, 목록에는 날마다 쌓인 시퀀스가 전부 체크된 채로 남는다.
+// 어제 것은 체크만 풀고 지우지는 않는다. 다시 쓰고 싶으면 체크하면 된다.
+// 만든 날짜가 없는 시퀀스는 언제 만든 건지 알 수 없어 건드리지 않는다.
+function dropYesterday(list) {
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  let touched = false;
+  const next = (list || []).map(x => {
+    const old = x.savedAt && x.savedAt < dayStart.getTime();
+    if (!old || (x.queued === false && !x.startAt)) return x;
+    touched = true;
+    return { ...x, queued: false, startAt: '' };
+  });
+  return touched ? next : list;
+}
+
 function blockClips(block) {
   return block.clips?.length ? block.clips : [block.clip];
 }
@@ -1952,7 +1970,88 @@ function HistoryTab({ history, setHistory, customers }) {
 // 체크한 것만 위에서부터 이어서 재생되고, 시퀀스 사이 간격은 각 줄에서 정한다.
 // 만들어진 시퀀스가 모이는 곳. 여기서 오늘 돌릴 것을 고르고 순서와 간격을 정한다.
 // 만드는 일은 '시퀀스 만들기' 탭에서만 한다.
-function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }) {
+// 아침에 한 번 눌러 하루치를 짠다.
+// 타임 수와 첫 시각, 간격만 주면 그날 운동으로 필요한 만큼 만들어 시각까지 붙인다.
+function DayPlanner({ onPlan, todayLabel }) {
+  const [count, setCount] = useState(() => loadLS('ft_plan_count', 6));
+  const [startAt, setStartAt] = useState(() => loadLS('ft_plan_start', '10:30'));
+  const [gap, setGap] = useState(() => loadLS('ft_plan_gap', 90));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  // 마지막 타임이 몇 시에 시작하는지 미리 보여 준다
+  const lastAt = (() => {
+    const [h, m] = String(startAt).split(':').map(Number);
+    if (!Number.isFinite(h)) return '';
+    const d = new Date(); d.setHours(h, m + (count - 1) * gap, 0, 0);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  })();
+
+  function go() {
+    setBusy(true); setMsg('');
+    // 여러 개를 짜는 동안 화면이 멎지 않게 한 박자 뒤에 돌린다
+    setTimeout(() => {
+      const n = onPlan({ count, startAt, gapMinutes: gap });
+      setBusy(false);
+      if (n > 0) {
+        saveLS('ft_plan_count', count); saveLS('ft_plan_start', startAt); saveLS('ft_plan_gap', gap);
+        setMsg(n < count
+          ? `${n}타임까지 짰습니다. 영상이 모자라 나머지는 만들지 못했습니다.`
+          : `${n}타임을 짰습니다. 아래에서 확인하고 시작하세요.`);
+      }
+    }, 30);
+  }
+
+  return (
+    <div style={{
+      padding: 16, borderRadius: 10, marginBottom: 22,
+      background: T.surface, border: `1px solid ${T.accent}44`,
+    }}>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>오늘 하루 짜기</div>
+      <div style={{ fontSize: 12, color: T.dim, marginBottom: 14, lineHeight: 1.6 }}>
+        {todayLabel
+          ? <>오늘은 <b style={{ color: T.text }}>{todayLabel}</b> 입니다. 타임마다 동작이 겹치지 않게 짭니다.</>
+          : '설정에서 오늘 요일의 운동을 먼저 정하세요.'}
+      </div>
+
+      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 11, color: T.dim }}>타임 수
+          <input type="number" min={1} max={20} value={count} aria-label="타임 수"
+            onChange={e => setCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+            style={{ display: 'block', width: 76, marginTop: 4, fontSize: 13 }} />
+        </label>
+        <label style={{ fontSize: 11, color: T.dim }}>첫 타임 시각
+          <input type="time" step={300} value={startAt} aria-label="첫 타임 시각"
+            onChange={e => setStartAt(e.target.value)}
+            style={{ display: 'block', width: 116, marginTop: 4, fontSize: 13 }} />
+        </label>
+        <label style={{ fontSize: 11, color: T.dim }}>타임 간격
+          <select value={gap} aria-label="타임 간격"
+            onChange={e => setGap(Number(e.target.value))}
+            style={{ display: 'block', width: 96, marginTop: 4, fontSize: 13 }}>
+            {[60, 75, 90, 105, 120, 150, 180].map(n => (
+              <option key={n} value={n}>{n}분</option>
+            ))}
+          </select>
+        </label>
+        <button onClick={go} disabled={busy || !todayLabel} style={{
+          padding: '11px 20px', borderRadius: 8, fontSize: 14, fontWeight: 700,
+          background: busy || !todayLabel ? T.dimMid : T.accent, color: '#fff',
+        }}>{busy ? '짜는 중...' : '하루치 짜기'}</button>
+      </div>
+
+      {lastAt && (
+        <div style={{ fontSize: 11, color: T.dim, marginTop: 10 }}>
+          {startAt} 부터 {gap}분 간격 · 마지막 {count}타임은 {lastAt} 시작
+        </div>
+      )}
+      {msg && <div style={{ fontSize: 12, color: '#22C55E', marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
+function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
+                   onPlanDay, todayLabel }) {
   // 펼쳐서 구성을 확인 중인 시퀀스
   const [openId, setOpenId] = useState(null);
 
@@ -2010,6 +2109,8 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths }
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
+
+        <DayPlanner onPlan={onPlanDay} todayLabel={todayLabel} />
 
         {/* 목록 = 대기열 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
@@ -2864,7 +2965,7 @@ export default function App() {
   // 한 번 읽은 길이는 저장해 두고 바로 쓴다.
   const [durations, setDurations] = useState(() => loadLS('ft_durations', {}));
 
-  const [sessions, setSessions] = useState(() => loadLS('ft_sessions', []));
+  const [sessions, setSessions] = useState(() => dropYesterday(loadLS('ft_sessions', [])));
   const [playlist, setPlaylist] = useState(() => loadLS('ft_playlist', []));
   const [history, setHistory] = useState(() => loadLS('ft_history', []));
   // 지금 진행 중인 기록의 id. 큐가 바뀌면 새 기록을 만든다.
@@ -3361,6 +3462,73 @@ export default function App() {
     return ses;
   }
 
+  // 하루치를 한 번에 짠다.
+  //
+  // 아침에 켜서 밤까지 쓰는 곳이라, 타임마다 만들고 시각을 넣는 일을 여러 번
+  // 반복해야 했다. 타임 수와 첫 시각, 간격만 주면 그날 요일의 운동 성격으로
+  // 필요한 만큼 짜서 시각까지 붙여 준다. 타임끼리 동작이 겹치지 않도록 쓴
+  // 기록을 그때그때 반영하며 짠다.
+  function planDay({ count, startAt, gapMinutes }) {
+    const con = CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)];
+    if (!con) { alert('오늘 요일에 정해진 운동이 없습니다. 설정에서 먼저 정하세요.'); return 0; }
+    if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return 0; }
+
+    const enriched = clips.map(c => ({ ...c, ...(clipAttrs[c.filePath] || clipAttrs[c.id] || {}) }));
+    const pool = enriched.filter(c => con.cats.includes(c.code));
+    const unknown = pool.filter(c => !(c.duration > 0)).length;
+    if (pool.length > 0 && unknown / pool.length > 0.2) {
+      alert(`영상 길이를 아직 읽는 중입니다 (${pool.length}개 중 ${unknown}개 남음).\n`
+        + '잠시 후 다시 눌러 주세요.');
+      return 0;
+    }
+
+    const [h, m] = String(startAt || '').split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) { alert('첫 시각을 정해 주세요.'); return 0; }
+
+    // 한 번에 여러 개를 짜므로 사용 기록을 그 자리에서 이어 붙인다.
+    // 상태 반영을 기다리면 모든 타임이 같은 기록을 보고 똑같이 나온다.
+    const use = { ...clipUse };
+    const now = Date.now();
+    const made = [];
+    for (let i = 0; i < count; i++) {
+      const cfg = { ...cfgWithRest, includeCats: con.cats, focus: con.focus,
+                    method: con.method, recentUse: use };
+      const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfg });
+      if (r.warmupClips.length + r.mainClips.length + r.coolClips.length === 0) {
+        if (i === 0) { alert(explainEmptyPool(enriched, cfg)); return 0; }
+        break;   // 재료가 떨어졌으면 만든 데까지만
+      }
+      const blocksOf = blocksFromPlan(r);
+      for (const b of blocksOf) {
+        for (const c of blockClips(b)) if (c?.filePath) use[c.filePath] = now + i;
+      }
+      const t = new Date();
+      t.setHours(h, m + i * gapMinutes, 0, 0);
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      made.push({
+        id: uid(),
+        name: `${i + 1}타임 · ${con.label}`,
+        concept: con.label,
+        customerName: activeCustomer?.name || '',
+        blocks: blocksOf,
+        savedAt: Date.now(),
+        queued: true,
+        startAt: `${hh}:${mm}`,
+      });
+    }
+    if (made.length === 0) return 0;
+
+    // 오늘 것만 돌도록 기존 대기열은 체크를 푼다
+    setSessions(prev => {
+      const next = [...prev.map(x => ({ ...x, queued: false, startAt: '' })), ...made];
+      saveData('ft_sessions', next);
+      return next;
+    });
+    setClipUse(() => { saveData('ft_clip_use', use); return use; });
+    return made.length;
+  }
+
   // 목록에서 하나만 골라 바로 재생한다. 대기열 설정은 건드리지 않는다.
   function playSession(id) {
     if (!sessions.some(x => x.id === id)) return;
@@ -3468,7 +3636,12 @@ export default function App() {
         if (cust)  { setCustomers(cust);  saveLS('ft_customers',  cust); }
         if (blks)  { setBlocks(blks);     saveLS('ft_blocks',     blks); }
         if (attrs) { setClipAttrs(attrs); saveLS('ft_clip_attrs', attrs); }
-        if (ses)   { setSessions(ses);    saveLS('ft_sessions',   ses); }
+        if (ses)   {
+          const rolled = dropYesterday(ses);
+          setSessions(rolled);
+          saveLS('ft_sessions', rolled);
+          if (rolled !== ses) saveData('ft_sessions', rolled);
+        }
         if (pl)    { setPlaylist(pl);     saveLS('ft_playlist',   pl); }
         if (hist)  { setHistory(hist);    saveLS('ft_history',    hist); }
         if (cfg)   { setSettings(p => ({ ...p, ...cfg })); saveLS('ft_settings', cfg); }
@@ -3524,7 +3697,8 @@ export default function App() {
         )}
         {tab === 'queue' && (
           <QueueTab sessions={hydratedSessions} setSessions={setSessions} setTab={setTab}
-            onPlaySession={playSession}
+            onPlaySession={playSession} onPlanDay={planDay}
+            todayLabel={CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)]?.label || ''}
             missingPaths={missingPathSet} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
