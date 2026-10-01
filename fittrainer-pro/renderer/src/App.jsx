@@ -2057,11 +2057,14 @@ function HistoryTab({ history, setHistory, customers }) {
 // 만드는 일은 '시퀀스 만들기' 탭에서만 한다.
 // 아침에 한 번 눌러 하루치를 짠다.
 // 타임 수와 첫 시각, 간격만 주면 그날 운동으로 필요한 만큼 만들어 시각까지 붙인다.
-function DayPlanner({ onPlan, todayLabel }) {
+function DayPlanner({ onPlan, todayLabel, todayCode }) {
   // 운영하는 시각을 그대로 누른다. 10, 11, 13, 18, 19, 20, 21 처럼 띄엄띄엄
   // 운영해도 간격을 계산할 필요가 없다.
   const [hours, setHours] = useState(() => loadLS('ft_plan_hours', [10, 11, 13, 18, 19, 20, 21]));
   const [half, setHalf] = useState(() => loadLS('ft_plan_half', false));
+  // 요일에 정해진 성격이 기본이지만, 그날 하고 싶은 성격으로 바꿔서 짤 수 있다.
+  const [con, setCon] = useState(todayCode || '');
+  useEffect(() => { setCon(prev => prev || todayCode || ''); }, [todayCode]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -2079,7 +2082,7 @@ function DayPlanner({ onPlan, todayLabel }) {
     setBusy(true); setMsg('');
     // 여러 개를 짜는 동안 화면이 멎지 않게 한 박자 뒤에 돌린다
     setTimeout(() => {
-      const n = onPlan({ times });
+      const n = onPlan({ times, conceptCode: con });
       setBusy(false);
       if (n > 0) {
         saveLS('ft_plan_hours', picked); saveLS('ft_plan_half', half);
@@ -2090,7 +2093,7 @@ function DayPlanner({ onPlan, todayLabel }) {
     }, 30);
   }
 
-  const ready = !!todayLabel && times.length > 0;
+  const ready = !!con && times.length > 0;
 
   return (
     <div style={{
@@ -2103,6 +2106,18 @@ function DayPlanner({ onPlan, todayLabel }) {
           ? <>오늘은 <b style={{ color: T.text }}>{todayLabel}</b> 입니다. 타임마다 동작이 겹치지 않게 짭니다.</>
           : '설정에서 오늘 요일의 운동을 먼저 정하세요.'}
       </div>
+
+      <label style={{ fontSize: 11, color: T.dim, display: 'block', marginBottom: 14 }}>
+        오늘 짤 운동
+        <select value={con} aria-label="오늘 짤 운동" onChange={e => setCon(e.target.value)}
+          style={{ display: 'block', marginTop: 4, fontSize: 14, padding: '7px 10px', minWidth: 200 }}>
+          {CONCEPTS.map(c => (
+            <option key={c.code} value={c.code}>
+              {c.label}{c.code === todayCode ? ' (오늘 요일)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
 
       <div style={{ fontSize: 11, color: T.dim, marginBottom: 7 }}>운영하는 시각을 누르세요</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
@@ -2151,7 +2166,7 @@ function DayPlanner({ onPlan, todayLabel }) {
 }
 
 function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
-                   onPlanDay, todayLabel }) {
+                   onPlanDay, todayLabel, todayCode }) {
   // 펼쳐서 구성을 확인 중인 시퀀스
   const [openId, setOpenId] = useState(null);
 
@@ -2210,7 +2225,7 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>
       <div style={{ maxWidth: 760, margin: '0 auto' }}>
 
-        <DayPlanner onPlan={onPlanDay} todayLabel={todayLabel} />
+        <DayPlanner onPlan={onPlanDay} todayLabel={todayLabel} todayCode={todayCode} />
 
         {/* 목록 = 대기열 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
@@ -2311,7 +2326,7 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
                     <input type="time" step={300} value={ses.startAt || ''}
                       aria-label={`${ses.name} 운동 시작 시각`}
                       onChange={e => setStart(ses.id, e.target.value)}
-                      style={{ fontSize: 13, padding: '5px 8px', width: 108 }} />
+                      style={{ fontSize: 13, padding: '5px 8px', width: 150, minWidth: 150 }} />
                     {ses.startAt && past(ses.startAt) && (
                       <span title="지난 시각이라 기다리지 않고 바로 시작합니다"
                         style={{ fontSize: 10, color: T.dimMid }}>지남</span>
@@ -3592,8 +3607,9 @@ export default function App() {
   // 반복해야 했다. 타임 수와 첫 시각, 간격만 주면 그날 요일의 운동 성격으로
   // 필요한 만큼 짜서 시각까지 붙여 준다. 타임끼리 동작이 겹치지 않도록 쓴
   // 기록을 그때그때 반영하며 짠다.
-  function planDay({ times }) {
-    const con = CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)];
+  function planDay({ times, conceptCode }) {
+    // 고른 성격이 있으면 그걸로 짠다. 없으면 요일에 정해진 성격.
+    const con = CONCEPT_MAP[conceptCode] || CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)];
     if (!con) { alert('오늘 요일에 정해진 운동이 없습니다. 설정에서 먼저 정하세요.'); return 0; }
     if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return 0; }
 
@@ -3819,6 +3835,7 @@ export default function App() {
           <QueueTab sessions={hydratedSessions} setSessions={setSessions} setTab={setTab}
             onPlaySession={playSession} onPlanDay={planDay}
             todayLabel={CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)]?.label || ''}
+            todayCode={conceptForDay(new Date(), settings.weekdayMap) || ''}
             missingPaths={missingPathSet} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}

@@ -59,6 +59,37 @@ for (const con of Object.values(CONCEPT_MAP)) {
   }
 }
 
+// 부위를 고른 성격은 본운동이 실제로 그 부위여야 한다.
+// 제보: "하체 집중으로 짰는데 코어·전신 동작이 줄줄이 올라온다."
+// 부위가 맞는 동작을 앞으로 정렬만 해 두면, 종류별로 뽑는 단계에서 다시 섞인다.
+{
+  // 제보자 화면처럼 하체가 일부뿐인 라이브러리
+  const mixed = [
+    ...LOWER_CARDIO.map(n => clip(n, 'CAR', '하체')),
+    ...['마운틴클라이머', '푸시프레스(백)', '푸시프레스', '버피', '점핑잭',
+        '하이니', '스케이터', '턱(바)'].map(n => clip(n, 'CAR', '전신')),
+    ...CORE.map(n => clip(n, 'CCB', '코어')),
+    ...['폼롤링(앞벅지)', '폼롤링(등)'].map(n => clip(n, 'CFR', '전신')),
+    ...['스트레칭(햄)', '스트레칭(어깨)'].map(n => clip(n, 'STT', '전신')),
+  ];
+  const con = CONCEPT_MAP.lower;
+  for (let k = 0; k < RUNS; k++) {
+    const r = composeProgram({
+      enrichedClips: mixed, customer: {},
+      sessionCfg: { duration: 45, includeCats: con.cats, focus: con.focus, method: con.method },
+    });
+    const main = (r.mainUnits || r.mainClips.map(c => [c])).flat();
+    const lower = main.filter(c => c.part === '하체').length;
+    if (main.length === 0) { failures.push('하체 집중: 본운동이 비었다'); continue; }
+    if (lower / main.length < 0.8) {
+      failures.push(`하체 집중: 본운동 ${main.length}개 중 하체가 ${lower}개뿐이다`);
+    }
+    // 준비·정리운동까지 하체로 좁히면 폼롤링·스트레칭이 사라진다
+    if (r.warmupClips.length === 0) failures.push('하체 집중: 준비운동이 사라졌다');
+    if (r.coolClips.length === 0) failures.push('하체 집중: 정리운동이 사라졌다');
+  }
+}
+
 if (failures.length) {
   console.error('라이브러리 종류가 적을 때 실패:');
   for (const f of [...new Set(failures)]) console.error('  - ' + f);

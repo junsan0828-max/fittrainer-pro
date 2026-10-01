@@ -278,6 +278,17 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
 
   const byCode = code => pool.filter(c => c.code === code);
   const byCodes = codes => pool.filter(c => codes.includes(c.code));
+
+  // 부위를 고른 성격(하체 집중, 상체·코어)은 본운동이 실제로 그 부위여야 한다.
+  // 앞으로 정렬만 해 두면 종류별로 뽑는 단계에서 다시 섞여, 하체 집중인데
+  // 코어·전신 동작이 줄줄이 올라온다. 부위가 맞는 동작이 넉넉하면 본운동은
+  // 거기서만 뽑는다. 준비·정리운동은 부위를 안 따진다 — 폼롤링·스트레칭에
+  // 하체 표시가 붙어 있는 경우가 드물어서, 따지면 준비운동이 사라진다.
+  const hitsFocus = c => !!focus && focus !== '전신'
+    && ((c.part || '').includes(focus) || (c.bodyParts || []).includes(focus));
+  const focused = pool.filter(hitsFocus);
+  const mainPool = focused.length >= 8 ? focused : pool;
+  const mainBy = codes => mainPool.filter(c => codes.includes(c.code));
   // 준비운동 풀과 정리운동 풀은 폼롤링·스트레칭을 함께 쓴다. 한쪽에서 꺼내도
   // 다른 쪽에는 그대로 남아 있어, 같은 동작이 한 시퀀스에 두 번 들어가곤 했다.
   // 어느 풀에서 꺼냈든 한 번 쓴 동작은 다시 꺼내지 않는다.
@@ -327,9 +338,9 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   // 살아있는(아직 소비 안 된) 카테고리별 큐 — method별 조합 함수가 여기서 뽑아 쓴다.
   const queues = {
     warm: [...byCodes(['CFR', 'CFS', 'MOV'])],
-    str: [...byCodes(['STR', 'MOV'])],
-    core: [...byCodes(['CCS', 'CCB'])],
-    car: [...byCodes(['CAR'])],
+    str: [...mainBy(['STR', 'MOV'])],
+    core: [...mainBy(['CCS', 'CCB'])],
+    car: [...mainBy(['CAR'])],
     cool: [...byCodes(['STT', 'CFR', 'CFS'])],
   };
 
@@ -454,8 +465,11 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   // 시간을 채울 때는 코어부터 쓴다. 코어는 어느 구성에나 자연스럽게 붙고,
   // 같은 동작을 반복하거나 휴식을 늘리는 것보다 운동으로서 낫다.
   // 코어가 없는 컨셉(스트레칭·회복)은 그 컨셉의 재료로 채운다.
-  const fillOrder = queues.core.length
-    ? [queues.core, queues.str, queues.car, queues.warm, queues.cool]
+  // 부위를 고른 성격은 본운동 풀이 그 부위로 좁혀져 있다. 시간을 메울 때까지
+  // 좁혀 두면 코어가 모자라 휴식만 늘어난다. 메울 때는 부위 밖 코어도 쓴다.
+  const coreRest = byCodes(['CCS', 'CCB']).filter(c => !queues.core.includes(c));
+  const fillOrder = (queues.core.length || coreRest.length)
+    ? [queues.core, coreRest, queues.str, queues.car, queues.warm, queues.cool]
     : [queues.cool, queues.warm, queues.str, queues.car];
 
   // 채울 때 꺼내는 단위도 묶음이다. 남은 클립을 묶음 크기만큼 모아 한 덩이로 넣는다.
