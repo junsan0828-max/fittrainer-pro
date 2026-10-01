@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const transcode = require('./transcode');
@@ -149,6 +149,25 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+// 하루 종일 켜 두는 프로그램이다. 운영 시각 사이에는 영상이 아니라 카운트다운만
+// 돌기 때문에, 윈도우가 '아무것도 안 한다'고 보고 화면을 끄거나 절전으로 들어간다.
+// 재생 화면이 돌고 있는 동안에는 그걸 막는다.
+let awakeId = null;
+function keepAwake(on) {
+  try {
+    if (on) {
+      if (awakeId === null || !powerSaveBlocker.isStarted(awakeId)) {
+        awakeId = powerSaveBlocker.start('prevent-display-sleep');
+      }
+    } else if (awakeId !== null && powerSaveBlocker.isStarted(awakeId)) {
+      powerSaveBlocker.stop(awakeId);
+      awakeId = null;
+    }
+  } catch { /* 절전 제어가 안 되는 환경이어도 앱은 돌아야 한다 */ }
+}
+ipcMain.handle('keep-awake', (_e, on) => { keepAwake(!!on); return awakeId !== null; });
+app.on('will-quit', () => keepAwake(false));
 
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {

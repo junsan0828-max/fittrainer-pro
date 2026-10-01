@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // 재생 화면이 도는 동안 화면이 꺼지지 않게 한다
+  keepAwake: (on) => ipcRenderer.invoke('keep-awake', on),
   selectFolder: () => ipcRenderer.invoke('select-folder'),
   rescanFolder: () => ipcRenderer.invoke('rescan-folder'),
   getLibraryFolder: () => ipcRenderer.invoke('get-library-folder'),

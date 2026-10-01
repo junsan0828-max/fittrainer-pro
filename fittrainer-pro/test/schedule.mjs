@@ -45,6 +45,12 @@ function buildQueue(entries) {
     if (!next || next.startAt) return;
     q.push({ type: 'break', duration: 600, nextName: next.name });
   });
+  if (q.length > 0 && entries.some(e => e.startAt)) {
+    const last = entries.filter(e => e.startAt).pop();
+    if (q[q.length - 1]?.type === 'rest') q.pop();
+    q.push({ type: 'standby', sessionName: last?.name || '',
+             firstClock: entries.find(e => e.startAt)?.startAt || '' });
+  }
   return q;
 }
 
@@ -91,10 +97,30 @@ check('대기 화면에 다음 운동 이름이 실린다',
     JSON.stringify(waits) === JSON.stringify([0, 0, 60]), `${waits}분`);
 }
 
+// 마지막 타임이 끝나도 멈추지 않는다. 멈추면 피시가 잠들어 다음 날 못 쓴다.
+check('마지막 타임 뒤에 마감 화면이 붙는다',
+  q[q.length - 1]?.type === 'standby', `마지막 항목: ${JSON.stringify(q[q.length - 1])}`);
+check('마감 화면이 내일 첫 타임을 안다',
+  q[q.length - 1]?.firstClock === '10:30');
+check('시각이 없는 대기열에는 마감 화면이 안 붙는다',
+  !buildQueue([{ name: 'ㄱ', blocks: [1] }]).some(x => x.type === 'standby'));
+
 // 화면 문구
 check("대기 화면이 '다음 운동까지' 로 뜬다", /다음 운동까지/.test(src));
+check('마감 화면이 실제로 그려진다', /'standby'/.test(src) && /오늘 운동 마감/.test(src));
 check("'수업' 이라는 말은 쓰지 않는다", !/수업/.test(src));
 check('시간표를 켜고 끌 수 있다', /turnScheduleOn/.test(src) && /turnScheduleOff/.test(src));
+
+// 운영 시각 사이에는 영상이 아니라 카운트다운만 돈다. 막지 않으면 화면이 꺼진다.
+{
+  const mainJs = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  check('절전을 막는 배선이 끊기지 않았다',
+    /powerSaveBlocker/.test(mainJs) && /prevent-display-sleep/.test(mainJs)
+    && /'keep-awake'/.test(mainJs) && /keepAwake/.test(preload)
+    && /electronAPI\?\.keepAwake/.test(src));
+  check('앱을 닫을 때는 절전을 풀어 준다', /will-quit[\s\S]{0,60}keepAwake\(false\)/.test(mainJs));
+}
 
 if (fails.length) {
   console.error('\n실패 ' + fails.length + '건:');

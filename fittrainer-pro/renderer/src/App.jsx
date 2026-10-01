@@ -145,6 +145,12 @@ function gapLabel(gap) {
   return `${g.minutes}분 뒤`;
 }
 
+function nowClock() {
+  const d = new Date();
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map(n => String(n).padStart(2, '0')).join(':');
+}
+
 // 큐 한 항목이 차지하는 시간(초). 영상은 ffprobe 로 읽어둔 길이를 쓴다.
 function itemSeconds(it) {
   if (!it) return 0;
@@ -163,6 +169,23 @@ function queueTiming(queue, ci, progress, restCountdown) {
     if (i < ci) before += sec;
   }
   const cur = queue[ci];
+
+  // 재생 화면에 큐가 올라가 있는 동안에는 윈도우가 화면을 끄지 못하게 한다.
+  // 운영 시각 사이에는 영상이 아니라 카운트다운만 돌아서, 막지 않으면 잠든다.
+  useEffect(() => {
+    const on = queue.length > 0;
+    window.electronAPI?.keepAwake?.(on);
+    return () => { window.electronAPI?.keepAwake?.(false); };
+  }, [queue.length]);
+
+  // 마감 화면의 시계. 1초마다 다시 읽는다 — 멈춘 화면처럼 보이지 않게.
+  const [clockNow, setClockNow] = useState(() => nowClock());
+  useEffect(() => {
+    if (cur?.type !== 'standby') return;
+    setClockNow(nowClock());
+    const t = setInterval(() => setClockNow(nowClock()), 1000);
+    return () => clearInterval(t);
+  }, [cur?.type]);
   const inCur = (cur?.type === 'rest' || cur?.type === 'break')
     ? Math.max(0, (cur.duration || 0) - (restCountdown || 0))
     : Math.min(progress || 0, itemSeconds(cur));
@@ -1577,6 +1600,19 @@ function expandPlaylist(entries) {
       });
     }
   });
+
+  // 마지막 타임이 끝나도 화면은 그대로 둔다. 운영 시각 사이와 마감 뒤에도
+  // 뭔가 돌고 있어야 피시가 잠들지 않고, 다음 날 아침에 그대로 이어 쓴다.
+  if (q.length > 0 && entries.some(e => e.startAt)) {
+    const last = entries.filter(e => e.startAt).pop();
+    if (q[q.length - 1]?.type === 'rest') q.pop();
+    q.push({
+      type: 'standby',
+      duration: 0,
+      sessionName: last?.name || '',
+      firstClock: entries.find(e => e.startAt)?.startAt || '',
+    });
+  }
   return q;
 }
 
@@ -2811,6 +2847,30 @@ function PlayerTab({ blocks, playlist, playbackMap, onConvertOne, onReport, regi
               background: 'rgba(34,197,94,.16)', color: '#22C55E',
               fontSize: 14, fontWeight: 600,
             }}>지금 시작</button>
+          </div>
+        ) : cur?.type === 'standby' ? (
+          // 마감 화면. 운영 시각이 모두 지나도 꺼지지 않고 시계가 돈다.
+          <div style={{
+            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: 6,
+            background: 'linear-gradient(160deg, rgba(124,58,237,.10), rgba(34,197,94,.06))',
+          }}>
+            <div style={{
+              fontSize: 13, fontWeight: 600, letterSpacing: 2, color: T.dim,
+              textTransform: 'uppercase', marginBottom: 12,
+            }}>오늘 운동 마감</div>
+            <div style={{
+              fontSize: 96, fontWeight: 800, lineHeight: 1, color: T.text,
+              fontVariantNumeric: 'tabular-nums',
+            }}>{clockNow}</div>
+            <div style={{ fontSize: 15, color: T.dim, marginTop: 18 }}>
+              {cur.sessionName ? `마지막 · ${cur.sessionName}` : '오늘 타임을 모두 마쳤습니다'}
+            </div>
+            {cur.firstClock && (
+              <div style={{ fontSize: 14, color: T.dim, marginTop: 6 }}>
+                내일 첫 타임 {cur.firstClock} · 이 화면을 그대로 두면 피시가 잠들지 않습니다
+              </div>
+            )}
           </div>
         ) : cur?.type === 'rest' ? (
           <div className="rest-split" style={{
