@@ -21,9 +21,12 @@ function fmtDate(ms) {
   return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
 }
 
+// 영상 길이는 ffprobe 가 소수로 준다. 반올림하지 않으면
+// '3:59.163999999999' 같은 숫자가 그대로 화면에 나온다.
 function fmtSec(s) {
-  const m = Math.floor(s / 60), ss = s % 60;
-  return m > 0 ? `${m}:${String(ss).padStart(2,'0')}` : `${ss}s`;
+  const t = Math.round(Number(s) || 0);
+  const m = Math.floor(t / 60), ss = t % 60;
+  return m > 0 ? `${m}:${String(ss).padStart(2, '0')}` : `${ss}s`;
 }
 
 const GOALS = ['체형교정', '근력강화', '다이어트', '재활', '균형트레이닝', '체력증진'];
@@ -1001,6 +1004,20 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap
   // 요일마다 정해진 운동 성격. 설정에서 바꿀 수 있다.
   const todayConcept = CONCEPT_MAP[conceptForDay(new Date(), weekdayMap)] || null;
 
+  // 라이브러리의 종류별 개수. 한쪽으로 쏠려 있으면 미리 알려 준다.
+  const libCounts = useMemo(() => {
+    const m = {};
+    for (const c of clips) if (c.code) m[c.code] = (m[c.code] || 0) + 1;
+    return m;
+  }, [clips]);
+  const lopsided = useMemo(() => {
+    const total = Object.values(libCounts).reduce((n, v) => n + v, 0);
+    if (total < 5) return '';
+    const [top] = Object.entries(libCounts).sort((a, b) => b[1] - a[1]);
+    if (!top || top[1] / total < 0.8) return '';
+    return CAT_MAP[top[0]]?.label || top[0];
+  }, [libCounts]);
+
   function toggleCfg(field, val) {
     setSessionCfg(prev => ({ ...prev, [field]: prev[field] === val ? '' : val }));
   }
@@ -1180,6 +1197,35 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap
                 </button>
               </div>
             )}
+
+            {/* 라이브러리에 어떤 종류가 몇 개 있는지.
+                한 종류만 잔뜩이면 어떤 컨셉을 골라도 그것만 나온다. */}
+            <div style={{ marginTop: 18 }}>
+              <div style={{ fontSize: 11, color: T.dim, marginBottom: 6 }}>라이브러리에 있는 종류</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {CATS.filter(c => c.code !== 'TMR').map(c => {
+                  const n = libCounts[c.code] || 0;
+                  return (
+                    <span key={c.code} title={`${c.label} ${n}개`} style={{
+                      fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 4,
+                      background: n ? c.color + '22' : 'transparent',
+                      color: n ? c.color : T.dimMid,
+                      border: n ? 'none' : `1px dashed ${T.border}`,
+                    }}>{c.code} {n}</span>
+                  );
+                })}
+              </div>
+              {lopsided && (
+                <div style={{
+                  fontSize: 11, color: '#F59E0B', marginTop: 8, lineHeight: 1.6,
+                  padding: '8px 10px', borderRadius: 6, background: 'rgba(245,158,11,.10)',
+                }}>
+                  {lopsided} 영상이 거의 전부입니다. 어떤 컨셉을 골라도 그 종류로만 짜입니다.
+                  <br />다른 종류가 있는데도 0 으로 보이면 설정 → 영상 분류에서
+                  파일 접두어를 맞춰 주세요.
+                </div>
+              )}
+            </div>
 
             <div style={{ fontSize: 12, color: T.dim, margin: '18px 0 8px', lineHeight: 1.6 }}>
               {todayConcept ? '다른 성격으로 짜려면 아래에서 고르세요.' : '컨셉을 누르면 위 조건으로 시퀀스가 짜여 오른쪽 작업대에 올라옵니다.'}
@@ -1364,7 +1410,8 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap
         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 12, borderBottom: `1px solid ${T.border}` }}>
           <span style={{ color: T.dim }}>총 시간</span>
           <span style={{ fontWeight: 700, color: totalSec > 50*60 ? '#E84040' : totalSec >= 46*60 ? '#22C55E' : T.text }}>
-            {Math.floor(totalSec/60)}분 {totalSec%60 > 0 ? `${totalSec%60}초` : ''}
+            {Math.floor(Math.round(totalSec) / 60)}분{' '}
+            {Math.round(totalSec) % 60 > 0 ? `${Math.round(totalSec) % 60}초` : ''}
           </span>
         </div>
 

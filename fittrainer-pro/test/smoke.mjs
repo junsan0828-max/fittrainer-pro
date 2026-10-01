@@ -40,7 +40,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 // 앱이 기대하는 최소한의 데이터. 각 탭이 빈 화면이 아니라 실제 목록을 그리게 한다.
 const CLIPS = [
   { id: 'c1', fileName: 'MU 스쿼트. 하체. 015.mp4', code: 'STR', name: '스쿼트',
-    part: '하체', reps: 15, duration: 40, filePath: 'C:/v/a.mp4', playbackPath: 'C:/v/a.mp4' },
+    // ffprobe 는 길이를 소수로 준다. 반올림하지 않으면 화면에 그대로 샌다.
+    part: '하체', reps: 15, duration: 39.163999999999, filePath: 'C:/v/a.mp4', playbackPath: 'C:/v/a.mp4' },
   { id: 'c2', fileName: 'ST 햄스트링. 하체. 030.mp4', code: 'STT', name: '햄스트링',
     part: '하체', reps: 30, duration: 35, filePath: 'C:/v/b.mp4', playbackPath: 'C:/v/b.mp4' },
   { id: 'c3', fileName: 'AE 점핑잭. 전신. 020.mp4', code: 'CAR', name: '점핑잭',
@@ -374,6 +375,13 @@ async function checkWeekday() {
     if (!txt.includes('오늘의 운동')) throw new Error("'오늘의 운동' 안내가 없음");
   });
 
+  await step('라이브러리 종류별 개수가 보인다', async () => {
+    const txt = await page.locator('#root').innerText();
+    if (!txt.includes('라이브러리에 있는 종류')) throw new Error('개수 표시가 없음');
+    // 픽스처는 종류마다 12개씩 들어 있다
+    if (!/STR 1[23]/.test(txt)) throw new Error('STR 개수가 보이지 않음');
+  });
+
   await step('같은 컨셉을 또 눌러도 겹치지 않는다고 알린다', async () => {
     const txt = await page.locator('#root').innerText();
     if (!txt.includes('최근에 쓴 동작은 빼고')) throw new Error('안내 문구가 없음');
@@ -485,6 +493,12 @@ async function checkGrouping() {
     const txt = await page.locator('#root').innerText();
     if (!txt.includes('햄스트링 → 점핑잭')) throw new Error('묶음 표시가 없음');
     if (!txt.includes('묶음 2동작')) throw new Error("'묶음 2동작' 안내가 없음");
+  });
+
+  await step('시간이 소수로 새어 나오지 않는다', async () => {
+    const txt = await page.locator('#root').innerText();
+    const bad = txt.match(/\d+[.:]\d*\d{4,}/);
+    if (bad) throw new Error(`소수가 그대로 보임: ${bad[0]}`);
   });
 
   await step('묶음은 풀 수 있어야 함', async () => {
