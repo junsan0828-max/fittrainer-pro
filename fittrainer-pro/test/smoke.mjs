@@ -181,7 +181,7 @@ async function checkQueueTab() {
   await page.waitForTimeout(300);
 
   await step('체크박스가 시퀀스마다 있어야 함', async () => {
-    const n = await page.locator('input[type=checkbox]').count();
+    const n = await page.locator('input[type=checkbox][aria-label$="대기열에 포함"]').count();
     if (n < 2) throw new Error(`체크박스 ${n}개`);
   });
 
@@ -212,11 +212,12 @@ async function checkQueueTab() {
   });
 
   await step('체크를 풀면 간격 설정이 사라져야 함', async () => {
-    await page.locator('input[type=checkbox]').first().uncheck();
+    // 화면에는 다른 체크박스도 있다. 시퀀스 줄의 것만 집는다.
+    await page.locator('input[type=checkbox][aria-label$="대기열에 포함"]').first().uncheck();
     await page.waitForTimeout(250);
     if (await page.getByRole('button', { name: '지정 시각', exact: true }).count() !== 0)
       throw new Error('체크를 풀었는데도 간격 설정이 남아 있음');
-    await page.locator('input[type=checkbox]').first().check();
+    await page.locator('input[type=checkbox][aria-label$="대기열에 포함"]').first().check();
   });
 
   console.log(`${failures.length === before ? '  OK' : 'FAIL'}  시퀀스 목록 · 체크와 간격`);
@@ -410,20 +411,24 @@ async function checkDayPlan() {
   await page.getByRole('button', { name: '시퀀스 목록', exact: true }).first().click();
   await page.waitForTimeout(350);
 
-  await step('타임 수·시각·간격을 정할 수 있다', async () => {
-    for (const label of ['타임 수', '첫 타임 시각', '타임 간격']) {
-      if (await page.locator(`[aria-label="${label}"]`).count() === 0)
-        throw new Error(`'${label}' 칸이 없음`);
+  // 간격을 계산해서 넣는 게 아니라, 운영하는 시각을 그대로 누른다.
+  await step('운영 시각을 눌러서 고른다', async () => {
+    for (const h of [6, 13, 18, 22]) {
+      if (await page.locator(`[aria-label="${h}시 운영"]`).count() === 0)
+        throw new Error(`${h}시 칸이 없음`);
     }
   });
 
-  await step('마지막 타임 시각을 미리 알려 준다', async () => {
-    await page.locator('[aria-label="타임 수"]').fill('4');
-    await page.locator('[aria-label="첫 타임 시각"]').fill('10:30');
+  await step('고른 시각을 그대로 보여 준다', async () => {
+    await page.getByRole('button', { name: '시각 비우기', exact: true }).click();
+    // 띄엄띄엄 운영해도 간격 계산이 필요 없어야 한다
+    for (const h of [10, 11, 13, 18]) {
+      await page.locator(`[aria-label="${h}시 운영"]`).click();
+    }
     await page.waitForTimeout(250);
     const txt = await page.locator('#root').innerText();
-    // 10:30 에서 90분씩 네 타임이면 마지막은 15:00
-    if (!txt.includes('15:00')) throw new Error(`마지막 시각 안내가 없음`);
+    if (!txt.includes('4타임 · 10:00 · 11:00 · 13:00 · 18:00'))
+      throw new Error('고른 시각 안내가 다름');
   });
 
   await step('누르면 하루치가 만들어지고 시각이 붙는다', async () => {
@@ -431,7 +436,9 @@ async function checkDayPlan() {
     await page.waitForTimeout(1200);
     const txt = await page.locator('#root').innerText();
     if (!/\d타임을 짰습니다/.test(txt)) throw new Error('짜였다는 안내가 없음');
-    if (!txt.includes('1타임')) throw new Error('타임이 목록에 없음');
+    if (!txt.includes('1타임 10:00')) throw new Error('타임에 시각이 안 붙음');
+    // 간격이 아니라 누른 시각 그대로여야 한다
+    if (!txt.includes('18:00')) throw new Error('18시 타임이 없음');
     const times = await page.locator('input[type=time][aria-label$="운동 시작 시각"]').count();
     if (times < 4) throw new Error(`시각 칸이 ${times}개`);
   });

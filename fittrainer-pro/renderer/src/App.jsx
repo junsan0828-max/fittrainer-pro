@@ -2022,34 +2022,39 @@ function HistoryTab({ history, setHistory, customers }) {
 // 아침에 한 번 눌러 하루치를 짠다.
 // 타임 수와 첫 시각, 간격만 주면 그날 운동으로 필요한 만큼 만들어 시각까지 붙인다.
 function DayPlanner({ onPlan, todayLabel }) {
-  const [count, setCount] = useState(() => loadLS('ft_plan_count', 6));
-  const [startAt, setStartAt] = useState(() => loadLS('ft_plan_start', '10:30'));
-  const [gap, setGap] = useState(() => loadLS('ft_plan_gap', 90));
+  // 운영하는 시각을 그대로 누른다. 10, 11, 13, 18, 19, 20, 21 처럼 띄엄띄엄
+  // 운영해도 간격을 계산할 필요가 없다.
+  const [hours, setHours] = useState(() => loadLS('ft_plan_hours', [10, 11, 13, 18, 19, 20, 21]));
+  const [half, setHalf] = useState(() => loadLS('ft_plan_half', false));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
-  // 마지막 타임이 몇 시에 시작하는지 미리 보여 준다
-  const lastAt = (() => {
-    const [h, m] = String(startAt).split(':').map(Number);
-    if (!Number.isFinite(h)) return '';
-    const d = new Date(); d.setHours(h, m + (count - 1) * gap, 0, 0);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  })();
+  const picked = useMemo(
+    () => [...new Set(hours)].filter(h => h >= 0 && h <= 23).sort((a, b) => a - b),
+    [hours]);
+  const times = useMemo(
+    () => picked.map(h => `${String(h).padStart(2, '0')}:${half ? '30' : '00'}`),
+    [picked, half]);
+
+  const toggleHour = h => setHours(prev =>
+    prev.includes(h) ? prev.filter(x => x !== h) : [...prev, h]);
 
   function go() {
     setBusy(true); setMsg('');
     // 여러 개를 짜는 동안 화면이 멎지 않게 한 박자 뒤에 돌린다
     setTimeout(() => {
-      const n = onPlan({ count, startAt, gapMinutes: gap });
+      const n = onPlan({ times });
       setBusy(false);
       if (n > 0) {
-        saveLS('ft_plan_count', count); saveLS('ft_plan_start', startAt); saveLS('ft_plan_gap', gap);
-        setMsg(n < count
+        saveLS('ft_plan_hours', picked); saveLS('ft_plan_half', half);
+        setMsg(n < times.length
           ? `${n}타임까지 짰습니다. 영상이 모자라 나머지는 만들지 못했습니다.`
-          : `${n}타임을 짰습니다. 아래에서 확인하고 시작하세요.`);
+          : `${n}타임을 짰습니다. 정한 시각이 되면 자동으로 시작합니다.`);
       }
     }, 30);
   }
+
+  const ready = !!todayLabel && times.length > 0;
 
   return (
     <div style={{
@@ -2063,37 +2068,47 @@ function DayPlanner({ onPlan, todayLabel }) {
           : '설정에서 오늘 요일의 운동을 먼저 정하세요.'}
       </div>
 
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <label style={{ fontSize: 11, color: T.dim }}>타임 수
-          <input type="number" min={1} max={20} value={count} aria-label="타임 수"
-            onChange={e => setCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-            style={{ display: 'block', width: 76, marginTop: 4, fontSize: 13 }} />
+      <div style={{ fontSize: 11, color: T.dim, marginBottom: 7 }}>운영하는 시각을 누르세요</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        {Array.from({ length: 18 }, (_, i) => i + 6).map(h => {
+          const on = picked.includes(h);
+          return (
+            <button key={h} onClick={() => toggleHour(h)}
+              aria-label={`${h}시 운영`} aria-pressed={on}
+              style={{
+                minWidth: 46, padding: '7px 0', borderRadius: 6,
+                fontSize: 13, fontWeight: on ? 800 : 600,
+                fontVariantNumeric: 'tabular-nums',
+                background: on ? T.accent : 'transparent',
+                color: on ? '#fff' : T.dim,
+                border: `1px solid ${on ? T.accent : T.border}`,
+              }}>{h}</button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginTop: 14 }}>
+        <label style={{ fontSize: 12, color: T.dim, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input type="checkbox" checked={half} aria-label="30분에 시작"
+            onChange={e => setHalf(e.target.checked)} />
+          30분에 시작 (10:30, 11:30 …)
         </label>
-        <label style={{ fontSize: 11, color: T.dim }}>첫 타임 시각
-          <input type="time" step={300} value={startAt} aria-label="첫 타임 시각"
-            onChange={e => setStartAt(e.target.value)}
-            style={{ display: 'block', width: 116, marginTop: 4, fontSize: 13 }} />
-        </label>
-        <label style={{ fontSize: 11, color: T.dim }}>타임 간격
-          <select value={gap} aria-label="타임 간격"
-            onChange={e => setGap(Number(e.target.value))}
-            style={{ display: 'block', width: 96, marginTop: 4, fontSize: 13 }}>
-            {[60, 75, 90, 105, 120, 150, 180].map(n => (
-              <option key={n} value={n}>{n}분</option>
-            ))}
-          </select>
-        </label>
-        <button onClick={go} disabled={busy || !todayLabel} style={{
+        <button onClick={() => setHours([])} style={{
+          fontSize: 12, color: T.dim, background: 'transparent',
+          border: `1px solid ${T.border}`, borderRadius: 6, padding: '6px 12px',
+        }}>시각 비우기</button>
+        <button onClick={go} disabled={busy || !ready} style={{
           padding: '11px 20px', borderRadius: 8, fontSize: 14, fontWeight: 700,
-          background: busy || !todayLabel ? T.dimMid : T.accent, color: '#fff',
+          marginLeft: 'auto',
+          background: busy || !ready ? T.dimMid : T.accent, color: '#fff',
         }}>{busy ? '짜는 중...' : '하루치 짜기'}</button>
       </div>
 
-      {lastAt && (
-        <div style={{ fontSize: 11, color: T.dim, marginTop: 10 }}>
-          {startAt} 부터 {gap}분 간격 · 마지막 {count}타임은 {lastAt} 시작
-        </div>
-      )}
+      <div style={{ fontSize: 11, color: T.dim, marginTop: 10, fontVariantNumeric: 'tabular-nums' }}>
+        {times.length > 0
+          ? `${times.length}타임 · ${times.join(' · ')}`
+          : '운영할 시각을 하나 이상 골라 주세요.'}
+      </div>
       {msg && <div style={{ fontSize: 12, color: '#22C55E', marginTop: 8 }}>{msg}</div>}
     </div>
   );
@@ -3517,7 +3532,7 @@ export default function App() {
   // 반복해야 했다. 타임 수와 첫 시각, 간격만 주면 그날 요일의 운동 성격으로
   // 필요한 만큼 짜서 시각까지 붙여 준다. 타임끼리 동작이 겹치지 않도록 쓴
   // 기록을 그때그때 반영하며 짠다.
-  function planDay({ count, startAt, gapMinutes }) {
+  function planDay({ times }) {
     const con = CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)];
     if (!con) { alert('오늘 요일에 정해진 운동이 없습니다. 설정에서 먼저 정하세요.'); return 0; }
     if (clips.length === 0) { alert('라이브러리에서 운동 영상 폴더를 먼저 선택하세요.'); return 0; }
@@ -3531,15 +3546,15 @@ export default function App() {
       return 0;
     }
 
-    const [h, m] = String(startAt || '').split(':').map(Number);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) { alert('첫 시각을 정해 주세요.'); return 0; }
+    const slots = (times || []).filter(t => /^\d{1,2}:\d{2}$/.test(t)).sort();
+    if (slots.length === 0) { alert('운영할 시각을 하나 이상 골라 주세요.'); return 0; }
 
     // 한 번에 여러 개를 짜므로 사용 기록을 그 자리에서 이어 붙인다.
     // 상태 반영을 기다리면 모든 타임이 같은 기록을 보고 똑같이 나온다.
     const use = { ...clipUse };
     const now = Date.now();
     const made = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < slots.length; i++) {
       const cfg = { ...cfgWithRest, includeCats: con.cats, focus: con.focus,
                     method: con.method, recentUse: use };
       const r = composeProgram({ enrichedClips: enriched, customer: activeCustomer, sessionCfg: cfg });
@@ -3551,19 +3566,15 @@ export default function App() {
       for (const b of blocksOf) {
         for (const c of blockClips(b)) if (c?.filePath) use[c.filePath] = now + i;
       }
-      const t = new Date();
-      t.setHours(h, m + i * gapMinutes, 0, 0);
-      const hh = String(t.getHours()).padStart(2, '0');
-      const mm = String(t.getMinutes()).padStart(2, '0');
       made.push({
         id: uid(),
-        name: `${i + 1}타임 · ${con.label}`,
+        name: `${i + 1}타임 ${slots[i]} · ${con.label}`,
         concept: con.label,
         customerName: activeCustomer?.name || '',
         blocks: blocksOf,
         savedAt: Date.now(),
         queued: true,
-        startAt: `${hh}:${mm}`,
+        startAt: slots[i],
       });
     }
     if (made.length === 0) return 0;
