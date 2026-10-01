@@ -1010,12 +1010,13 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap
     for (const c of clips) if (c.code) m[c.code] = (m[c.code] || 0) + 1;
     return m;
   }, [clips]);
-  const lopsided = useMemo(() => {
-    const total = Object.values(libCounts).reduce((n, v) => n + v, 0);
-    if (total < 5) return '';
-    const [top] = Object.entries(libCounts).sort((a, b) => b[1] - a[1]);
-    if (!top || top[1] / total < 0.8) return '';
-    return CAT_MAP[top[0]]?.label || top[0];
+  // 종류가 몇 가지밖에 없으면, 성격이 쓰는 종류가 아예 없을 수 있다.
+  // 그럴 때 빌더는 종류를 넘겨서 부위로 맞춰 채운다 — 그 사실을 미리 알려 준다.
+  const thinLib = useMemo(() => {
+    const kinds = Object.keys(libCounts).filter(k => k !== 'TMR');
+    const total = kinds.reduce((n, k) => n + libCounts[k], 0);
+    if (total < 5 || kinds.length >= 4) return 0;
+    return kinds.length;
   }, [libCounts]);
 
   function toggleCfg(field, val) {
@@ -1215,13 +1216,14 @@ function ComposeTab({ clips, clipAttrs, blocks, setBlocks, restScale, weekdayMap
                   );
                 })}
               </div>
-              {lopsided && (
+              {thinLib > 0 && (
                 <div style={{
                   fontSize: 11, color: '#F59E0B', marginTop: 8, lineHeight: 1.6,
                   padding: '8px 10px', borderRadius: 6, background: 'rgba(245,158,11,.10)',
                 }}>
-                  {lopsided} 영상이 거의 전부입니다. 어떤 컨셉을 골라도 그 종류로만 짜입니다.
-                  <br />다른 종류가 있는데도 0 으로 보이면 설정 → 영상 분류에서
+                  지금 {thinLib}가지만 인식되어 있습니다. 고른 성격이 쓰는 종류가 없을 때는
+                  종류를 넘겨서 부위(하체·상체·코어)가 맞는 동작으로 채웁니다.
+                  <br />0 으로 보이는 종류의 영상이 실제로 있다면 설정 → 영상 분류에서
                   파일 접두어를 맞춰 주세요.
                 </div>
               )}

@@ -39,8 +39,10 @@ export const CONCEPTS = [
     cats: ['STR', 'MOV', 'CCS', 'CCB', 'CFR', 'CFS', 'STT'], focus: '전신', method: 'block' },
   { code: 'cardio_core', label: '유산소 · 코어',
     cats: ['CAR', 'CCB', 'CCS', 'MOV', 'CFR', 'CFS', 'STT'], focus: '코어', method: 'circuit' },
+  // 하체는 근력만이 아니다. 점프·스텝업·런지스윙 같은 유산소(CAR) 동작도
+  // 전부 하체 운동이라, CAR 를 빼면 하체 라이브러리의 절반이 날아간다.
   { code: 'lower', label: '하체 집중',
-    cats: ['STR', 'MOV', 'CCB', 'CFR', 'CFS', 'STT'], focus: '하체', method: 'block' },
+    cats: ['STR', 'CAR', 'MOV', 'CCB', 'CFR', 'CFS', 'STT'], focus: '하체', method: 'block' },
   { code: 'circuit_full', label: '전신 순환운동',
     cats: ['STR', 'CAR', 'CCS', 'CCB', 'MOV', 'CFR', 'CFS', 'STT'], focus: '전신', method: 'interleave' },
   { code: 'upper_core', label: '상체 · 코어',
@@ -230,20 +232,43 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   // 최근에 쓴 동작을 뒤로 미루기 위한 기록. { 파일경로: 마지막으로 쓴 시각(ms) }
   const recentUse = sessionCfg.recentUse || null;
 
-  let pool = enrichedClips.filter(c => {
-    if (sessionCfg.includeCats?.length > 0 && !sessionCfg.includeCats.includes(c.code)) return false;
+  const safe = enrichedClips.filter(c => {
     if (customer?.injuries?.length > 0 && c.injuryRisk?.length > 0) {
       if (c.injuryRisk.some(r => customer.injuries.includes(r))) return false;
     }
     return true;
   });
 
+  // 성격마다 쓰는 영상 종류가 정해져 있다. 그런데 라이브러리가 아직 몇 종류밖에
+  // 없을 때 이걸 그대로 거르면, 성격이 안 쓰는 종류에 하체 영상이 다 들어 있어도
+  // 남은 한 종류로만 시퀀스가 채워진다(하체 집중을 눌렀는데 코어만 나오던 이유).
+  // 그래서 종류는 '거름망'이 아니라 '우선순위'로 쓴다. 걸러낸 결과가 너무 얇으면
+  // 나머지 종류도 뒤에 붙인다 — focus 정렬이 하체 동작을 앞으로 올려 주니까
+  // 종류가 달라도 부위는 맞는다.
+  const wanted = sessionCfg.includeCats?.length > 0 ? sessionCfg.includeCats : null;
+  let pool = safe;
+  let widened = null;
+  if (wanted) {
+    const inCats = safe.filter(c => wanted.includes(c.code));
+    const outCats = safe.filter(c => !wanted.includes(c.code));
+    const kinds = new Set(inCats.map(c => c.code)).size;
+    if (outCats.length > 0 && (kinds < 2 || inCats.length < 8)) {
+      pool = [...inCats, ...outCats];
+      widened = [...new Set(outCats.map(c => c.code))];
+    } else {
+      pool = inCats;
+    }
+  }
+
   const focus = sessionCfg.focus;
   if (focus && focus !== '전신') {
     const matched = pool.filter(c => (c.part || '').includes(focus) || (c.bodyParts || []).includes(focus));
     const rest = pool.filter(c => !(c.part || '').includes(focus) && !(c.bodyParts || []).includes(focus));
     // 포커스 우선순위는 유지하되, 그룹 내부는 매 실행마다 셔플 — 다양성 확보의 핵심.
-    pool = [...freshFirst(matched, recentUse), ...freshFirst(rest, recentUse)];
+    const rank = c => (wanted && !wanted.includes(c.code) ? 1 : 0);
+    const byRank = list => [...freshFirst(list.filter(c => !rank(c)), recentUse),
+                            ...freshFirst(list.filter(rank), recentUse)];
+    pool = [...byRank(matched), ...byRank(rest)];
   } else {
     pool = freshFirst(pool, recentUse);
   }
@@ -557,6 +582,7 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
     restScale,
     estimatedSeconds,
     rationale,
+    widened,
   };
 }
 
