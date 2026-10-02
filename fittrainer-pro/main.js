@@ -166,7 +166,14 @@ function keepAwake(on) {
     }
   } catch { /* 절전 제어가 안 되는 환경이어도 앱은 돌아야 한다 */ }
 }
-ipcMain.handle('keep-awake', (_e, on) => { keepAwake(!!on); return awakeId !== null; });
+// 걸렸다고 보고만 하고 실제로는 안 걸려 있으면, 하루를 꼬박 틀어 놓고서야
+// 안다. 매번 진짜 상태를 되돌려 준다.
+ipcMain.handle('keep-awake', (_e, on) => {
+  keepAwake(!!on);
+  try {
+    return awakeId !== null && powerSaveBlocker.isStarted(awakeId);
+  } catch { return false; }
+});
 app.on('will-quit', () => keepAwake(false));
 
 ipcMain.handle('select-folder', async () => {

@@ -279,16 +279,6 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
   const byCode = code => pool.filter(c => c.code === code);
   const byCodes = codes => pool.filter(c => codes.includes(c.code));
 
-  // 부위를 고른 성격(하체 집중, 상체·코어)은 본운동이 실제로 그 부위여야 한다.
-  // 앞으로 정렬만 해 두면 종류별로 뽑는 단계에서 다시 섞여, 하체 집중인데
-  // 코어·전신 동작이 줄줄이 올라온다. 부위가 맞는 동작이 넉넉하면 본운동은
-  // 거기서만 뽑는다. 준비·정리운동은 부위를 안 따진다 — 폼롤링·스트레칭에
-  // 하체 표시가 붙어 있는 경우가 드물어서, 따지면 준비운동이 사라진다.
-  const hitsFocus = c => !!focus && focus !== '전신'
-    && ((c.part || '').includes(focus) || (c.bodyParts || []).includes(focus));
-  const focused = pool.filter(hitsFocus);
-  const mainPool = focused.length >= 8 ? focused : pool;
-  const mainBy = codes => mainPool.filter(c => codes.includes(c.code));
   // 준비운동 풀과 정리운동 풀은 폼롤링·스트레칭을 함께 쓴다. 한쪽에서 꺼내도
   // 다른 쪽에는 그대로 남아 있어, 같은 동작이 한 시퀀스에 두 번 들어가곤 했다.
   // 어느 풀에서 꺼냈든 한 번 쓴 동작은 다시 꺼내지 않는다.
@@ -334,6 +324,24 @@ export function composeProgram({ enrichedClips, customer, sessionCfg }) {
         '고강도': { sets: 4, rest: 20, restAfter: 45, rpe: 15 } }[intensity]
       || { sets: 3, rest: 20, restAfter: 60, rpe: 13 };
   let mainSets = Math.max(1, Math.round(intSettings.sets * condMod));
+
+  // 부위를 고른 성격(하체 집중, 상체·코어)은 본운동이 실제로 그 부위여야 한다.
+  // 앞으로 정렬만 해 두면 종류별로 뽑는 단계에서 다시 섞여, 하체 집중인데
+  // 코어·전신 동작이 줄줄이 올라온다. 부위가 맞는 동작이 넉넉하면 본운동은
+  // 거기서만 뽑는다.
+  //
+  // 두 가지는 좁히지 않는다.
+  //  - 준비·정리운동. 폼롤링·스트레칭에 하체 표시가 붙는 일이 드물어서,
+  //    따지면 준비운동이 통째로 사라진다.
+  //  - 아직 안 쓴 동작이 한 타임을 채울 만큼 안 남았을 때. 하루에 일곱 타임을
+  //    짜면 부위가 맞는 동작이 금방 바닥나고, 그대로 좁혀 두면 타임끼리
+  //    같은 동작이 겹친다. 겹치는 것보다 부위를 조금 넓히는 편이 낫다.
+  const hitsFocus = c => !!focus && focus !== '전신'
+    && ((c.part || '').includes(focus) || (c.bodyParts || []).includes(focus));
+  const focused = pool.filter(hitsFocus);
+  const freshFocused = focused.filter(isFresh).length;
+  const mainPool = (focused.length >= 8 && freshFocused >= targetCount) ? focused : pool;
+  const mainBy = codes => mainPool.filter(c => codes.includes(c.code));
 
   // 살아있는(아직 소비 안 된) 카테고리별 큐 — method별 조합 함수가 여기서 뽑아 쓴다.
   const queues = {

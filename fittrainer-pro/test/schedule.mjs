@@ -119,6 +119,13 @@ check('시간표를 켜고 끌 수 있다', /turnScheduleOn/.test(src) && /turnS
     /powerSaveBlocker/.test(mainJs) && /prevent-display-sleep/.test(mainJs)
     && /'keep-awake'/.test(mainJs) && /keepAwake/.test(preload)
     && /electronAPI\?\.keepAwake/.test(src));
+  // 재생 화면 안에서만 걸면, 탭을 옮기는 순간 그 화면이 사라지며 같이 풀린다.
+  check('절전 차단이 재생 화면 밖에서 걸린다', /scheduleArmed/.test(src)
+    && /shouldStayAwake/.test(src));
+  check('절전 차단을 주기적으로 다시 건다',
+    /setInterval\(apply, 60000\)/.test(src));
+  check('걸렸는지 아닌지를 화면에 보여 준다', /화면 꺼짐 방지 켜짐/.test(src));
+  check('실제로 걸렸는지 확인해서 돌려준다', /isStarted\(awakeId\)/.test(mainJs));
   check('앱을 닫을 때는 절전을 풀어 준다', /will-quit[\s\S]{0,60}keepAwake\(false\)/.test(mainJs));
 }
 

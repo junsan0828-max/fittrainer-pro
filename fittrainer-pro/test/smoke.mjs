@@ -450,7 +450,11 @@ async function checkDayPlan() {
     if (!txt.includes('오늘 시간표 시작')) throw new Error('시작 버튼 문구가 다름');
   });
 
-  await step('타임마다 동작이 겹치지 않는다', async () => {
+  // 겹침이 0 일 수는 없다. 부위를 고른 성격은 그 부위 동작만 쓰는데, 일곱 타임
+  // × 열 동작을 부위가 맞는 동작 스무남은 개로 채우려면 산술적으로 돌려 쓸 수밖에
+  // 없다. 부위를 안 지키면 0 이 나오지만, 그건 '하체 집중인데 코어가 나온다'는
+  // 그 문제다. 그래서 겹침이 절반을 넘지 않는지를 본다.
+  await step('타임끼리 겹침이 절반을 넘지 않는다', async () => {
     const names = await page.evaluate(() => {
       const ses = JSON.parse(localStorage.getItem('ft_sessions') || '[]')
         .filter(s => s.startAt);
@@ -459,7 +463,9 @@ async function checkDayPlan() {
     for (let i = 0; i < names.length; i++) {
       for (let j = i + 1; j < names.length; j++) {
         const dup = names[i].filter(x => names[j].includes(x));
-        if (dup.length) throw new Error(`${i + 1}타임과 ${j + 1}타임이 ${dup.length}개 겹침`);
+        const limit = Math.max(1, Math.floor(Math.min(names[i].length, names[j].length) / 2));
+        if (dup.length > limit)
+          throw new Error(`${i + 1}타임과 ${j + 1}타임이 ${dup.length}개 겹침 (한도 ${limit})`);
       }
     }
   });

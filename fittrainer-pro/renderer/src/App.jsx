@@ -170,14 +170,6 @@ function queueTiming(queue, ci, progress, restCountdown) {
   }
   const cur = queue[ci];
 
-  // 재생 화면에 큐가 올라가 있는 동안에는 윈도우가 화면을 끄지 못하게 한다.
-  // 운영 시각 사이에는 영상이 아니라 카운트다운만 돌아서, 막지 않으면 잠든다.
-  useEffect(() => {
-    const on = queue.length > 0;
-    window.electronAPI?.keepAwake?.(on);
-    return () => { window.electronAPI?.keepAwake?.(false); };
-  }, [queue.length]);
-
   // 마감 화면의 시계. 1초마다 다시 읽는다 — 멈춘 화면처럼 보이지 않게.
   const [clockNow, setClockNow] = useState(() => nowClock());
   useEffect(() => {
@@ -2166,7 +2158,7 @@ function DayPlanner({ onPlan, todayLabel, todayCode }) {
 }
 
 function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
-                   onPlanDay, todayLabel, todayCode }) {
+                   onPlanDay, todayLabel, todayCode, awake }) {
   // 펼쳐서 구성을 확인 중인 시퀀스
   const [openId, setOpenId] = useState(null);
 
@@ -2259,6 +2251,21 @@ function QueueTab({ sessions, setSessions, setTab, onPlaySession, missingPaths,
             ? '정한 시각에만 영상이 돌아갑니다. 그 사이에는 다음 운동까지 남은 시간이 뜹니다.'
             : '체크한 시퀀스가 위에서부터 이어서 재생됩니다. 더블클릭하면 그것만 재생합니다.'}
         </div>
+
+        {/* 화면이 꺼지면 하루 시간표가 통째로 날아간다. 막혀 있는지 보여 준다. */}
+        {scheduled && (
+          <div style={{
+            fontSize: 11, marginBottom: 12, padding: '7px 10px', borderRadius: 6,
+            lineHeight: 1.6,
+            color: awake ? '#22C55E' : '#F59E0B',
+            background: awake ? 'rgba(34,197,94,.10)' : 'rgba(245,158,11,.10)',
+          }}>
+            {awake
+              ? '화면 꺼짐 방지 켜짐 — 운영 시각 사이에도 모니터가 꺼지지 않습니다.'
+              : '화면 꺼짐 방지가 안 걸렸습니다. 앱을 껐다 켜 주세요. '
+                + '그래도 꺼진다면 윈도우 설정 → 전원에서 화면 끄기를 "안 함" 으로 두세요.'}
+          </div>
+        )}
 
         {sessions.length === 0 ? (
           <div style={{ fontSize: 12, color: T.dim, padding: 24, textAlign: 'center', lineHeight: 1.7 }}>
@@ -3143,6 +3150,31 @@ export default function App() {
     return hydratedSessions.filter(s => s.queued !== false);
   }, [playlist, hydratedSessions]);
 
+  // 화면이 꺼지면 하루 시간표가 통째로 날아간다. 운영 시각 사이에는 영상이
+  // 아니라 카운트다운만 돌아서, 윈도우는 '아무것도 안 한다'고 보고 화면을 끈다.
+  //
+  // 예전에는 재생 화면 안에서만 막았다. 재생 탭을 벗어나면 그 화면이 통째로
+  // 사라지면서 막아 둔 것도 같이 풀렸고, 시각만 걸어 두고 목록에 머물면
+  // 애초에 걸리지도 않았다. 그래서 앱 바깥쪽에서 건다.
+  const scheduleArmed = useMemo(
+    () => playlistEntries.some(s => s.startAt),
+    [playlistEntries]);
+  const shouldStayAwake = scheduleArmed || (tab === 'player' && playlistEntries.length > 0);
+  const [awake, setAwake] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const apply = () => {
+      Promise.resolve(window.electronAPI?.keepAwake?.(shouldStayAwake))
+        .then(on => { if (alive) setAwake(!!on); })
+        .catch(() => {});
+    };
+    apply();
+    // 한 번 걸고 마는 대신 1분마다 다시 확인한다. 절전 차단이 어떤 이유로
+    // 풀려도 다음 확인에서 되살아난다 — 열세 시간을 버텨야 하는 화면이다.
+    const t = setInterval(apply, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [shouldStayAwake]);
+
 
   const clips = useMemo(
     () => rawClips.map(c => {
@@ -3836,6 +3868,7 @@ export default function App() {
             onPlaySession={playSession} onPlanDay={planDay}
             todayLabel={CONCEPT_MAP[conceptForDay(new Date(), settings.weekdayMap)]?.label || ''}
             todayCode={conceptForDay(new Date(), settings.weekdayMap) || ''}
+            awake={awake}
             missingPaths={missingPathSet} />
         )}
         {tab === 'player' && <PlayerTab blocks={blocks} playlist={playlistEntries}
